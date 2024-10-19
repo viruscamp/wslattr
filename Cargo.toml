@@ -1,0 +1,25 @@
+[package]
+name = "wslattr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "^4.5.20", features = ['derive'] }
+ntapi = { version = "^0.4.1", features = ['impl-default'] }
+registry = "^1.2.3"
+utfx = "0.1.0"
+
+[dependencies.winapi]
+version = "0.3.9"
+features = [
+    "cfg",
+    "evntrace",
+    "in6addr",
+    "inaddr",
+    "minwinbase",
+    "ntsecapi",
+    "windef",
+    "winioctl",
+    "impl-default",
+    "ioapiset",
+]
