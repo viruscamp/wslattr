@@ -1,9 +1,8 @@
-use std::{path::{self, Path, PathBuf}, str::FromStr};
+use std::path::{self, Path, PathBuf};
 use clap::{arg, command, Parser, Subcommand};
 
 use path_utils::*;
 use distro::Distro;
-use wslfs::WslfsReparseTag;
 
 mod distro;
 mod path_utils;
@@ -84,13 +83,13 @@ fn check_path<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) {
 
         let mut unix_path_comps = in_path.components();
         unix_path_comps.next(); // RootDir
-        real_path = d.base_path.join("rootfs").join(unix_path_comps);
+        real_path = d.base_path.join("rootfs").join(unix_path_comps); // .skip(1)
 
         full_path = in_path.to_path_buf();
     } else {
         let abs_path = path::absolute(in_path).expect(&format!("invalid path: {:?}", in_path));
         let path_prefix = try_get_abs_path_prefix(&abs_path);
-        if let Some(distro_name) = path_prefix.as_ref().and_then(try_get_distro_from_unc_path_prefix) {
+        if let Some(distro_name) = path_prefix.as_ref().and_then(try_get_distro_from_unc_prefix) {
             // wsl UNC path like r"\\wsl$\Arch\file"
             println!("try load distro from wsl path: {:?}!", distro_name);
 
@@ -100,7 +99,7 @@ fn check_path<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) {
             let mut abs_path_comps = abs_path.components();
             abs_path_comps.next(); // Prefix
             abs_path_comps.next(); // RootDir
-            real_path = d.base_path.join("rootfs").join(abs_path_comps);
+            real_path = d.base_path.join("rootfs").join(abs_path_comps); // .skip(2)
 
             full_path = abs_path;
         } else if is_path_prefix_disk(&path_prefix) {
@@ -129,14 +128,17 @@ fn check_path<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) {
 
         if let Some(ref ea_parsed) = wsl_file.ea_parsed {
             for ea in &ea_parsed.0 {
-                if ea.name == wslfs::LXUID {
-                    let uid = wslfs::ulong_from_ea_value(&ea.value).unwrap();
+                if ea.name == lxfs::LXATTRB {
+                    let lxattrb = lxfs::lxattrb_from_ea_value(&ea.value);
+                    println!("{}: {:?}", ea.name, lxattrb);
+                } else if ea.name == wslfs::LXUID {
+                    let uid = wslfs::ulong_from_ea_value(&ea.value[0..4]).unwrap();
                     println!("{}: {}", ea.name, uid);
                 } else if ea.name == wslfs::LXGID {
-                    let gid = wslfs::ulong_from_ea_value(&ea.value).unwrap();
+                    let gid = wslfs::ulong_from_ea_value(&ea.value[0..4]).unwrap();
                     println!("{}: {}", ea.name, gid);
                 } else if ea.name == wslfs::LXMOD {
-                    let st_mode = wslfs::ulong_from_ea_value(&ea.value).unwrap();
+                    let st_mode = wslfs::ulong_from_ea_value(&ea.value[0..4]).unwrap();
                     println!("{}: {:o}", ea.name, st_mode);
                 } else if ea.name == wslfs::LXDEV {
                     let type_major = wslfs::ulong_from_ea_value(&ea.value[0..4]).unwrap();

@@ -7,24 +7,24 @@ pub struct EaParsed(pub Vec<EaEntry>);
 
 pub struct EaEntry {
     pub flags: UCHAR,
-    pub name_raw: Vec<u8>,
+    /// ASCII only
     pub name: String,
     pub value: Vec<u8>,
 }
 
 /// 12, packed size, could not be used
-const EA_BASE_SIZE_PACKED: usize = size_of::<FILE_FULL_EA_INFORMATION>();
+const EA_BASE_SIZE_ALIGNED: usize = size_of::<FILE_FULL_EA_INFORMATION>();
 /// 9, use this
-const EA_BASE_SIZE_RAW: usize = size_of::<ULONG>() + size_of::<UCHAR>() + size_of::<UCHAR>() + size_of::<USHORT>() + 1;
-const EA_PACK: usize = size_of::<ULONG>();
+const EA_BASE_SIZE_RAW: usize = size_of::<ULONG>() + size_of::<UCHAR>() + size_of::<UCHAR>() + size_of::<USHORT>() + size_of::<UCHAR>();
+const EA_ALIGN: usize = size_of::<ULONG>();
 
-fn ea_entry_len(pea: &FILE_FULL_EA_INFORMATION) -> usize {
-    ea_entry_len_inner(pea.EaNameLength, pea.EaValueLength)
+fn ea_entry_size(pea: &FILE_FULL_EA_INFORMATION) -> usize {
+    ea_entry_size_inner(pea.EaNameLength, pea.EaValueLength)
 }
 
-fn ea_entry_len_inner(name_len: UCHAR, value_len: USHORT) -> usize {
+fn ea_entry_size_inner(name_len: UCHAR, value_len: USHORT) -> usize {
     let data_len = EA_BASE_SIZE_RAW + name_len as usize + value_len as usize;
-    let full_len = (data_len + 1) / EA_PACK * EA_PACK;
+    let full_len = (data_len + 1) / EA_ALIGN * EA_ALIGN;
     return full_len;
 }
 
@@ -37,7 +37,7 @@ pub unsafe fn parse_ea(buf: &[u8]) -> Option<EaParsed> {
     loop {
         let pea: &FILE_FULL_EA_INFORMATION = transmute(ea_ptr);
 
-        let pea_end = ea_ptr.add(ea_entry_len(pea));
+        let pea_end = ea_ptr.add(ea_entry_size(pea));
 
         // invalid ea data may cause read overflow
         assert!(pea_end <= buf_range.end);        
@@ -50,7 +50,6 @@ pub unsafe fn parse_ea(buf: &[u8]) -> Option<EaParsed> {
 
         ea_entries.push(EaEntry {
             flags: pea.Flags,
-            name_raw: name.into(),
             name: String::from_utf8_lossy(name).into_owned(), // should be ASCII
             value: value.into(),
         });
