@@ -1,5 +1,5 @@
 use std::io::{Error, Result};
-use std::mem::{transmute, MaybeUninit};
+use std::mem::transmute;
 use std::path::Path;
 
 use ntapi::ntioapi::*;
@@ -13,9 +13,6 @@ use ntapi::winapi::um::fileapi::*;
 use ntapi::winapi::shared::minwindef::DWORD;
 use utfx::U16CString;
 
-use crate::ea_utils::{parse_ea, EaParsed};
-use crate::wslfs::{parse_reparse_tag, WslfsReparseTag};
-
 pub type HANDLE = *mut ntapi::winapi::ctypes::c_void;
 
 pub struct WslFile {
@@ -25,26 +22,22 @@ pub struct WslFile {
     pub oa: OBJECT_ATTRIBUTES,
 
     pub ea_buffer: Vec<u8>,
-    pub ea_parsed: Option<EaParsed>,
-    
     pub reparse_tag_raw: Option<DWORD>,
-    pub reparse_tag: Option<WslfsReparseTag>,
 }
+
 impl Default for WslFile {
     fn default() -> Self {
-        Self { 
+        Self {
+            file_name: Default::default(),
             file_handle: NULL,
             isb: Default::default(),
             oa: Default::default(),
-            file_name: Default::default(),
             ea_buffer: Default::default(),
-            ea_parsed: None,
             reparse_tag_raw: None,
-            reparse_tag: None,
         }
     }
 }
-impl Drop for WslFile {
+impl<'a> Drop for WslFile {
     fn drop(&mut self) {
         unsafe {
             if self.file_handle != NULL {
@@ -118,53 +111,11 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
                 return Err(Error::last_os_error());
             }
             wsl_file.reparse_tag_raw = Some(file_attribute_tag_info.ReparseTag);
-            wsl_file.reparse_tag = parse_reparse_tag(file_attribute_tag_info.ReparseTag, wsl_file.file_handle).ok();
         } else {
             println!("[ERROR] NtOpenFile: {:#x}", nt_status);
             return Err(Error::from_raw_os_error(nt_status));
         }
     }
-
-    wsl_file.ea_buffer = read_ea(wsl_file.file_handle)?;
-    wsl_file.ea_parsed = parse_ea(&wsl_file.ea_buffer);
-
+    wsl_file.ea_buffer = crate::ea_io::read_ea(wsl_file.file_handle)?;
     return Ok(wsl_file);
-}
-
-unsafe fn read_ea(file_handle: HANDLE) -> Result<Vec<u8>> {
-    let mut isb = MaybeUninit::<IO_STATUS_BLOCK>::zeroed().assume_init();
-    let mut ea_info = MaybeUninit::<FILE_EA_INFORMATION>::zeroed().assume_init();
-  
-    // Query the Extended Attribute length
-    let nt_status = NtQueryInformationFile(
-        file_handle, 
-        transmute(&mut isb), 
-        transmute(&mut ea_info), 
-        size_of::<FILE_EA_INFORMATION>() as u32, 
-        FileEaInformation
-    );
-    if ! NT_SUCCESS(nt_status) {
-        println!("[ERROR] NtQueryInformationFile: {:#x}", nt_status);
-        return Err(Error::from_raw_os_error(nt_status));
-    }
-
-    let mut buf = vec![0u8; ea_info.EaSize as usize];
-
-    let nt_status = NtQueryEaFile(
-        file_handle,
-        transmute(&mut isb), 
-        transmute(buf.as_mut_ptr()),
-        ea_info.EaSize,
-        FALSE, // read all ea entries to buffer
-        NULL,
-        0,
-        transmute(NULL),
-        FALSE
-    );
-    if ! NT_SUCCESS(nt_status) {
-        println!("[ERROR] NtQueryEaFile: {:#x}", nt_status);
-        return Err(Error::from_raw_os_error(nt_status));
-    }
-
-    return Ok(buf);
 }

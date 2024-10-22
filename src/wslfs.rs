@@ -4,13 +4,43 @@ use std::io::{Error, Result};
 
 use ntapi::ntioapi::REPARSE_DATA_BUFFER;
 use ntapi::winapi::shared::minwindef::*;
-use ntapi::winapi::shared::ntdef::*;
+use ntapi::winapi::shared::ntdef::{NULL, NULL64, TRUE, FALSE};
 use ntapi::winapi::um::ioapiset::DeviceIoControl;
+use winapi::shared::winerror::ERROR_MORE_DATA;
 use winapi::um::winioctl::FSCTL_GET_REPARSE_POINT;
-use winapi::um::winnt::MAXIMUM_REPARSE_DATA_BUFFER_SIZE;
+use winapi::um::winnt::REPARSE_GUID_DATA_BUFFER;
+
+use crate::ea_parse::EaEntry;
 
 pub type HANDLE = *mut ntapi::winapi::ctypes::c_void;
 
+pub const LXUID: &'static str = "$LXUID";
+pub const LXGID: &'static str = "$LXGID";
+pub const LXMOD: &'static str = "$LXMOD";
+pub const LXDEV: &'static str = "$LXDEV";
+
+/// prefix of linux extended file attribute saved as ntfs ea
+pub const LX_DOT: &'static str = "LX.";
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct Lxdev {
+    pub type_major: ULONG,
+    pub type_minor: ULONG,
+}
+
+#[derive(Default)]
+pub struct WslfsParsed<'a> {
+    pub lxuid: Option<ULONG>,
+    pub lxgid: Option<ULONG>,
+    pub lxmod: Option<ULONG>,
+    pub lxdev: Option<Lxdev>,
+    pub reparse_tag: Option<WslfsReparseTag>,
+
+    pub lx_ea: Vec<EaEntry<'a>>,
+}
+
+#[derive(Debug)]
 pub enum WslfsReparseTag {
     LxSymlink(String),
     LxFifo,
@@ -52,53 +82,81 @@ pub fn parse_reparse_tag(reparse_tag: DWORD, file_handle: HANDLE) -> Result<Wslf
     })
 }
 
-unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
-    let mut link_buf = vec![0u8; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize];
+unsafe fn read_reparse_point_inner(file_handle: HANDLE, buf: &mut Vec<u8>) -> Option<Error> {
     let mut bytes_returned: u32 = 0;
     if DeviceIoControl(
         file_handle,
         FSCTL_GET_REPARSE_POINT,
         NULL,
         0,
-        transmute(link_buf.as_mut_ptr()),
-        MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
+        transmute(buf.as_mut_ptr()),
+        buf.len() as DWORD,
         &mut bytes_returned,
         transmute(NULL),
-    ) == 0 {
-        println!("[ERROR] DeviceIoControl, Cannot read symlink from reparse_point data");
-        return Err(Error::last_os_error());
+    ) != 0 {
+        //dbg!(buf.len(), bytes_returned);
+        buf.truncate(bytes_returned as usize);
+        return None;
     }
-    let bytes_len = bytes_returned as usize;
+    let err = Error::last_os_error();
+    //dbg!(err.raw_os_error());
+    return Some(err);
+}
+
+unsafe fn read_reparse_point(file_handle: HANDLE) -> Result<Vec<u8>> {
+    // a reasonable init buf size 64
+    let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + 36;
+    let mut buf = vec![0; buf_size];
+    match read_reparse_point_inner(file_handle, &mut buf) {
+        None => return Ok(buf),
+        Some(err) => {
+            match err.raw_os_error() {
+                Some(os_error) if os_error == ERROR_MORE_DATA as i32 => {
+                    // retry with new buf
+                    let reparse_buf = buf.as_ptr() as *const REPARSE_GUID_DATA_BUFFER;
+                    // larger in most case
+                    let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + (*reparse_buf).ReparseDataLength as usize;
+                    let mut buf = vec![0; buf_size];
+                    match read_reparse_point_inner(file_handle, &mut buf) {
+                        None => return Ok(buf),
+                        Some(err) => {
+                            println!("[ERROR] DeviceIoControl, Cannot read symlink from reparse_point data");
+                            return Err(err);
+                        }
+                    }
+                },
+                _ => {
+                    println!("[ERROR] DeviceIoControl, Cannot read symlink from reparse_point data");
+                    return Err(err);
+                }
+            }
+        },
+    }
+}
+
+unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
+    let link_buf = read_reparse_point(file_handle)?;
 
     let reparse_buf: &REPARSE_DATA_BUFFER = transmute(link_buf.as_ptr());
 
     //1d 00 00 a0 // ReparseTag = 0xA000001D
     //05 00 00 00 // ReparseDataLength = 5, Reserved = 0x0000
-    //02 00 00 00 // Tag = 0x00000002  or ReparseGuid.Data1: ulong = 2
+    //02 00 00 00 // Tag = 0x00000002
     //78          // link_name = 'x' UTF-8 no null
 
-    let data_len: usize = reparse_buf.ReparseDataLength as usize;
-    let data_str = &link_buf[12..(8 + data_len)];
+    let data_idx = size_of_val(&reparse_buf.ReparseTag) + size_of_val(&reparse_buf.ReparseDataLength) + size_of_val(&reparse_buf.Reserved);
+    let data_len = reparse_buf.ReparseDataLength as usize;
+    let str_idx = data_idx + 4;
     
     //println!("data_len={}, bytes_len={}", data_len, bytes_len);
-    assert!(data_len + 8 <= bytes_len);
     assert_eq!(reparse_buf.ReparseTag, IO_REPARSE_TAG_LX_SYMLINK);
-    //assert_eq!(reparse_buf.ReparseGuid.Data1, 2);
-    assert_eq!(&link_buf[8..12], [2, 0, 0, 0]);
+    assert!(data_idx + data_len <= link_buf.len());
+    assert_eq!(&link_buf[data_idx..str_idx], [2, 0, 0, 0]);
 
+    let data_str = &link_buf[str_idx..(data_idx + data_len)];
     let link_name = String::from_utf8_lossy(data_str).to_string();
 
     return Ok(link_name);
 }
 
-pub const LXUID: &'static str = "$LXUID";
-pub const LXGID: &'static str = "$LXGID";
-pub const LXMOD: &'static str = "$LXMOD";
-pub const LXDEV: &'static str = "$LXDEV";
 
-
-pub fn ulong_from_ea_value(ea_value: &[u8]) -> Option<winapi::shared::minwindef::ULONG> {
-    TryInto::<[u8; 4]>::try_into(ea_value)
-        .map(u32::from_le_bytes)
-        .ok()
-}
