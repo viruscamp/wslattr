@@ -3,14 +3,12 @@ use clap::{arg, command, Parser, Subcommand};
 
 use path_utils::*;
 use distro::Distro;
-use winapi::shared::ntdef::ULONG;
 use wsl_file::{WslFile, WslFileAttributes};
-use wslfs::parse_reparse_tag;
 
 mod distro;
 mod path_utils;
 mod wsl_file;
-mod ea_io;
+mod ntfs_io;
 mod ea_parse;
 mod lxfs;
 mod wslfs;
@@ -55,7 +53,7 @@ fn main() {
                 let lxattrb = ea_parsed.set_ea(lxfs::LXATTRB, &lxfs::EaLxattrbV1::default());
     
                 let ea = ea_parsed.to_buf();
-                unsafe { ea_io::write_ea(wsl_file.file_handle, &ea) };
+                unsafe { ntfs_io::write_ea(wsl_file.file_handle, &ea) };
             }
         }
     }

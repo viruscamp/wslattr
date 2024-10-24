@@ -208,7 +208,7 @@ struct ReparseDataBufferLxSymlink {
 }
 
 unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
-    let raw_buf = crate::ea_io::read_reparse_point(file_handle)?;
+    let raw_buf = crate::ntfs_io::read_reparse_point(file_handle)?;
 
     let data_idx = offset_of!(ReparseDataBufferLxSymlink, tag);
     let link_idx = offset_of!(ReparseDataBufferLxSymlink, link);

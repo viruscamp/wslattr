@@ -134,7 +134,7 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
             return Err(Error::from_raw_os_error(nt_status));
         }
     }
-    wsl_file.ea_buffer = crate::ea_io::read_ea(wsl_file.file_handle)?;
+    wsl_file.ea_buffer = crate::ntfs_io::read_ea(wsl_file.file_handle)?;
     return Ok(wsl_file);
 }
 
