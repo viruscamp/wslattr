@@ -5,15 +5,33 @@ use std::path::Path;
 use ntapi::ntioapi::*;
 use ntapi::ntobapi::NtClose;
 use ntapi::ntrtl::{RtlDosPathNameToNtPathName_U_WithStatus, RtlFreeUnicodeString};
-use ntapi::winapi::um::winbase::GetFileInformationByHandleEx;
-use ntapi::winapi::um::winnt::*;
-use ntapi::winapi::shared::ntdef::*;
-use ntapi::winapi::shared::ntstatus::*;
-use ntapi::winapi::um::fileapi::*;
-use ntapi::winapi::shared::minwindef::DWORD;
+use winapi::um::winbase::GetFileInformationByHandleEx;
+use winapi::um::winnt::*;
+use winapi::shared::ntdef::*;
+use winapi::shared::ntstatus::*;
+use winapi::um::fileapi::*;
+use winapi::shared::minwindef::DWORD;
 use utfx::U16CString;
 
-pub type HANDLE = *mut ntapi::winapi::ctypes::c_void;
+use crate::ea_parse::EaParsed;
+
+pub type HANDLE = winapi::shared::ntdef::HANDLE;
+
+pub trait WslFileAttributes<'a> : Sized {
+    fn try_load(wsl_file: &'a WslFile, ea_parsed: &'a EaParsed) -> Result<Self>;
+
+    fn get_uid(&self) -> Option<u32>;
+    fn get_gid(&self) -> Option<u32>;
+    fn get_mode(&self) -> Option<u32>;
+    fn get_dev_major(&self) -> Option<u32>;
+    fn get_dev_minor(&self) -> Option<u32>;
+
+    fn set_uid(&mut self, uid: u32);
+    fn set_gid(&mut self, gid: u32);
+    fn set_mode(&mut self, mode: u32);
+    fn set_dev_major(&mut self, dev_major: u32);
+    fn set_dev_minor(&mut self, dev_minor: u32);
+}
 
 pub struct WslFile {
     pub file_name: UNICODE_STRING,
@@ -21,8 +39,8 @@ pub struct WslFile {
     pub isb: IO_STATUS_BLOCK,
     pub oa: OBJECT_ATTRIBUTES,
 
-    pub ea_buffer: Vec<u8>,
-    pub reparse_tag_raw: Option<DWORD>,
+    pub ea_buffer: Option<Vec<u8>>,
+    pub reparse_tag: Option<DWORD>,
 }
 
 impl Default for WslFile {
@@ -33,7 +51,7 @@ impl Default for WslFile {
             isb: Default::default(),
             oa: Default::default(),
             ea_buffer: Default::default(),
-            reparse_tag_raw: None,
+            reparse_tag: None,
         }
     }
 }
@@ -110,7 +128,7 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
                 println!("[ERROR] GetFileInformationByHandleEx");
                 return Err(Error::last_os_error());
             }
-            wsl_file.reparse_tag_raw = Some(file_attribute_tag_info.ReparseTag);
+            wsl_file.reparse_tag = Some(file_attribute_tag_info.ReparseTag);
         } else {
             println!("[ERROR] NtOpenFile: {:#x}", nt_status);
             return Err(Error::from_raw_os_error(nt_status));
@@ -118,4 +136,13 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
     }
     wsl_file.ea_buffer = crate::ea_io::read_ea(wsl_file.file_handle)?;
     return Ok(wsl_file);
+}
+
+unsafe fn read_file_info(file_handle: HANDLE) -> Result<BY_HANDLE_FILE_INFORMATION> {
+    let mut file_info = BY_HANDLE_FILE_INFORMATION::default();
+    if GetFileInformationByHandle(file_handle, &mut file_info as *mut _) == 0 {
+        println!("[ERROR] GetFileInformationByHandle");
+        return Err(Error::last_os_error());
+    }
+    return Ok(file_info);
 }

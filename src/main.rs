@@ -4,7 +4,7 @@ use clap::{arg, command, Parser, Subcommand};
 use path_utils::*;
 use distro::Distro;
 use winapi::shared::ntdef::ULONG;
-use wsl_file::WslFile;
+use wsl_file::{WslFile, WslFileAttributes};
 use wslfs::parse_reparse_tag;
 
 mod distro;
@@ -15,6 +15,7 @@ mod ea_parse;
 mod lxfs;
 mod wslfs;
 mod vec_ex;
+mod time_utils;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -45,22 +46,20 @@ fn main() {
     let args = Args::parse();
     println!("args: {:?}!", args);
 
-    let mut wsl_file = load_wsl_file(&args.path, args.distro.as_ref());
-
-    if let Some(mut wsl_file) = wsl_file {
+    if let Some(wsl_file) = load_wsl_file(&args.path, args.distro.as_ref()) {
         if args.command == Some(Command::Downgrade) {
+            if let Some(ea_buffer) = &wsl_file.ea_buffer {
 
-            let mut ea_parsed = unsafe { ea_parse::parse_ea(&wsl_file.ea_buffer) };
+                let mut ea_parsed = unsafe { ea_parse::parse_ea(ea_buffer) };
 
-            let lxattrb = ea_parsed.set_ea(lxfs::LXATTRB, &lxfs::EaLxattrbV1::default());
-
-
-            let ea = ea_parsed.to_buf();
-            unsafe { ea_io::write_ea(wsl_file.file_handle, &ea) };
+                let lxattrb = ea_parsed.set_ea(lxfs::LXATTRB, &lxfs::EaLxattrbV1::default());
+    
+                let ea = ea_parsed.to_buf();
+                unsafe { ea_io::write_ea(wsl_file.file_handle, &ea) };
+            }
         }
     }
 }
-
 
 pub fn try_load_distro<S: AsRef<str>>(distro_from_arg: Option<S>) -> Option<Distro> {
     None
@@ -140,34 +139,18 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
     unsafe {
         let wsl_file = wsl_file::open_handle(&real_path).expect("failed to open file");
 
+        if let Some(ea_buffer) = &wsl_file.ea_buffer {
+            let ea_parsed = ea_parse::parse_ea(ea_buffer);
 
-        if let Some(tag) = wsl_file.reparse_tag_raw {
-            let reparse_tag = parse_reparse_tag(tag, wsl_file.file_handle).ok().unwrap();
-            println!("{reparse_tag}");
-        }
-
-        let ea_parsed = ea_parse::parse_ea(&wsl_file.ea_buffer);
-        {
-            for ea in &ea_parsed {
-                if ea.name == lxfs::LXATTRB {
-                    let lxattrb = ea.get_ea::<lxfs::EaLxattrbV1>();
-                    println!("{}: {:?}", ea.name, lxattrb);
-                } else if ea.name == wslfs::LXUID {
-                    let uid = ea.get_ea::<ULONG>();
-                    println!("{}: {}", ea.name, uid);
-                } else if ea.name == wslfs::LXGID {
-                    let gid = ea.get_ea::<ULONG>();
-                    println!("{}: {}", ea.name, gid);
-                } else if ea.name == wslfs::LXMOD {
-                    let st_mode = ea.get_ea::<ULONG>();
-                    println!("{}: {:o}", ea.name, st_mode);
-                } else if ea.name == wslfs::LXDEV {
-                    let dev_type = ea.get_ea::<wslfs::Lxdev>();
-                    println!("{}: {} {}", ea.name, dev_type.type_major, dev_type.type_minor);
-                } else {
-                    println!("{}", ea.name);
-                }
+            if let Ok(wslfs) = wslfs::WslfsParsed::try_load(&wsl_file, &ea_parsed) {
+                println!("{wslfs}");
             }
+
+            if let Ok(lxfs) = lxfs::LxfsParsed::try_load(&wsl_file, &ea_parsed) {
+                println!("{lxfs}");
+            }
+        } else {
+            println!("no EAs exist");
         }
         return Some(wsl_file);
     }

@@ -1,10 +1,15 @@
 use std::mem::transmute;
 use std::io::{Error, Result};
 
-use ntapi::ntioapi::{FileEaInformation, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, FILE_EA_INFORMATION, IO_STATUS_BLOCK};
+use ntapi::ntioapi::*;
+use winapi::shared::minwindef::DWORD;
 use winapi::shared::ntdef::*;
+use winapi::um::ioapiset::DeviceIoControl;
+use winapi::shared::winerror::ERROR_MORE_DATA;
+use winapi::um::winioctl::FSCTL_GET_REPARSE_POINT;
+use winapi::um::winnt::REPARSE_GUID_DATA_BUFFER;
 
-pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Vec<u8>> {
+pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
     let mut isb = IO_STATUS_BLOCK::default();
     let mut ea_info = FILE_EA_INFORMATION::default();
   
@@ -20,6 +25,9 @@ pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Vec<u8>> {
         println!("[ERROR] NtQueryInformationFile: {:#x}", nt_status);
         return Err(Error::from_raw_os_error(nt_status));
     }
+    if ea_info.EaSize == 0 {
+        return Ok(None);
+    }
 
     let mut buf = vec![0u8; ea_info.EaSize as usize];
 
@@ -32,14 +40,14 @@ pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Vec<u8>> {
         NULL,
         0,
         transmute(NULL),
-        FALSE
+        TRUE,
     );
     if ! NT_SUCCESS(nt_status) {
         println!("[ERROR] NtQueryEaFile: {:#x}", nt_status);
         return Err(Error::from_raw_os_error(nt_status));
     }
 
-    return Ok(buf);
+    return Ok(Some(buf));
 }
 
 pub unsafe fn write_ea(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
@@ -55,4 +63,56 @@ pub unsafe fn write_ea(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
         return Err(Error::from_raw_os_error(nt_status));
     }
     Ok(())
+}
+
+unsafe fn read_reparse_point_inner(file_handle: HANDLE, buf: &mut Vec<u8>) -> Option<Error> {
+    let mut bytes_returned: u32 = 0;
+    if DeviceIoControl(
+        file_handle,
+        FSCTL_GET_REPARSE_POINT,
+        NULL,
+        0,
+        transmute(buf.as_mut_ptr()),
+        buf.len() as DWORD,
+        &mut bytes_returned,
+        transmute(NULL),
+    ) != 0 {
+        //dbg!(buf.len(), bytes_returned);
+        buf.truncate(bytes_returned as usize);
+        return None;
+    }
+    let err = Error::last_os_error();
+    //dbg!(err.raw_os_error());
+    return Some(err);
+}
+
+pub unsafe fn read_reparse_point(file_handle: HANDLE) -> Result<Vec<u8>> {
+    // a reasonable init buf size 64
+    let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + 36;
+    let mut buf = vec![0; buf_size];
+    match read_reparse_point_inner(file_handle, &mut buf) {
+        None => return Ok(buf),
+        Some(err) => {
+            match err.raw_os_error() {
+                Some(os_error) if os_error == ERROR_MORE_DATA as i32 => {
+                    // retry with new buf
+                    let reparse_buf = buf.as_ptr() as *const REPARSE_GUID_DATA_BUFFER;
+                    // larger in most case
+                    let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + (*reparse_buf).ReparseDataLength as usize;
+                    let mut buf = vec![0; buf_size];
+                    match read_reparse_point_inner(file_handle, &mut buf) {
+                        None => return Ok(buf),
+                        Some(err) => {
+                            println!("[ERROR] DeviceIoControl, Cannot read symlink from reparse_point data");
+                            return Err(err);
+                        }
+                    }
+                },
+                _ => {
+                    println!("[ERROR] DeviceIoControl, Cannot read symlink from reparse_point data");
+                    return Err(err);
+                }
+            }
+        },
+    }
 }

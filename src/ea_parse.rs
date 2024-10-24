@@ -141,6 +141,8 @@ pub unsafe fn parse_ea(buf: &[u8]) -> EaParsed {
     loop {
         let pea: &FILE_FULL_EA_INFORMATION = transmute(ea_ptr);
 
+        assert!(buf.len() >= size_of::<FILE_FULL_EA_INFORMATION>());
+
         let pea_end = ea_ptr.add(ea_entry_size(pea));
 
         // invalid ea data may cause read overflow

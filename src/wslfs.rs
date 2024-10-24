@@ -1,18 +1,14 @@
+use std::borrow::Cow;
 use std::fmt::Display;
-use std::mem::transmute;
-use std::io::{Error, Result};
+use std::mem::{offset_of, transmute};
+use std::io::Result;
+use std::ops::Deref;
 
-use ntapi::ntioapi::REPARSE_DATA_BUFFER;
-use ntapi::winapi::shared::minwindef::*;
-use ntapi::winapi::shared::ntdef::{NULL, NULL64, TRUE, FALSE};
-use ntapi::winapi::um::ioapiset::DeviceIoControl;
-use winapi::shared::winerror::ERROR_MORE_DATA;
-use winapi::um::winioctl::FSCTL_GET_REPARSE_POINT;
-use winapi::um::winnt::REPARSE_GUID_DATA_BUFFER;
+use winapi::shared::minwindef::{DWORD, UCHAR, ULONG, USHORT};
+use winapi::shared::ntdef::HANDLE;
 
-use crate::ea_parse::EaEntry;
-
-pub type HANDLE = *mut ntapi::winapi::ctypes::c_void;
+use crate::ea_parse::{EaEntry, EaParsed};
+use crate::wsl_file::{WslFile, WslFileAttributes};
 
 pub const LXUID: &'static str = "$LXUID";
 pub const LXGID: &'static str = "$LXGID";
@@ -22,25 +18,134 @@ pub const LXDEV: &'static str = "$LXDEV";
 /// prefix of linux extended file attribute saved as ntfs ea
 pub const LX_DOT: &'static str = "LX.";
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct Lxdev {
-    pub type_major: ULONG,
-    pub type_minor: ULONG,
-}
-
 #[derive(Default)]
 pub struct WslfsParsed<'a> {
-    pub lxuid: Option<ULONG>,
-    pub lxgid: Option<ULONG>,
-    pub lxmod: Option<ULONG>,
-    pub lxdev: Option<Lxdev>,
+    pub lxuid: Option<Cow<'a, u32>>,
+    pub lxgid: Option<Cow<'a, u32>>,
+    pub lxmod: Option<Cow<'a, u32>>,
+    pub lxdev: Option<Cow<'a, Lxdev>>,
     pub reparse_tag: Option<WslfsReparseTag>,
 
-    pub lx_ea: Vec<EaEntry<'a>>,
+    pub lx_dot_ea: Vec<EaEntry<'a>>,
 }
 
-#[derive(Debug)]
+impl<'a> Display for WslfsParsed<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        //Symlink:                   -> target
+        //$LXUID:                    Uid: (0 / )
+        //$LXGID:                    Gid: (0 / )
+        //$LXMOD:                    Mode: 100755 Access: (0755) -rwxr-xr-x
+        //$LXDEV:                    Device type: 37,13
+        //Linux extended attributes(LX.*):
+        //  user.xdg.origin.url:     http://example.url
+
+        match &self.reparse_tag {
+            Some(t) => {
+                f.write_fmt(format_args!("{:28}{}\n", "File Type(Reparse Tag):", &t.type_name()))?;
+                if let WslfsReparseTag::LxSymlink(s) = t {
+                    f.write_fmt(format_args!("{:28}-> {}\n", "Symlink:", s))?;
+                }
+            },
+            None => {},
+        };
+
+        if let Some(l) = &self.lxuid {
+            f.write_fmt(format_args!("{:28}{}\n", "$LXUID:", *l))?;
+        }
+        if let Some(l) = &self.lxgid {
+            f.write_fmt(format_args!("{:28}{}\n", "$LXGID:", *l))?;
+        }
+        if let Some(l) = &self.lxmod {
+            f.write_fmt(format_args!("{:28}{:o}\n", "$LXMOD:", l.deref()))?;
+        }
+        if let Some(l) = &self.lxdev {
+            f.write_fmt(format_args!("{:28}Device type: {}, {}\n", "$LXDEV:", l.major, l.minor))?;
+        }
+
+        if self.lx_dot_ea.len() > 0 {
+            f.write_str("Linux extended attributes(LX.*):\n")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
+    fn try_load(wsl_file: &'a WslFile, ea_parsed: &'a EaParsed) -> Result<Self> {
+        let mut p = Self::default();
+        p.reparse_tag = if let Some(t) = wsl_file.reparse_tag {
+            Some(parse_reparse_tag(t, wsl_file.file_handle)?)
+        } else {
+            None
+        };
+
+        for ea in ea_parsed {
+            if ea.name == LXUID {
+                p.lxuid = Some(Cow::Borrowed(ea.get_ea::<ULONG>()));
+            } else if ea.name == LXGID {
+                p.lxgid = Some(Cow::Borrowed(ea.get_ea::<ULONG>()));
+            } else if ea.name == LXMOD {
+                p.lxmod = Some(Cow::Borrowed(ea.get_ea::<ULONG>()));
+            } else if ea.name == LXDEV {
+                p.lxdev = Some(Cow::Borrowed(ea.get_ea::<Lxdev>()));
+            }
+        }
+
+        Ok(p)
+    }
+
+    fn get_uid(&self) -> Option<u32> {
+        self.lxuid.as_ref().map(|l| *l.as_ref())
+    }
+
+    fn get_gid(&self) -> Option<u32> {
+        self.lxgid.as_ref().map(|l| *l.as_ref())
+    }
+
+    fn get_mode(&self) -> Option<u32> {
+        self.lxmod.as_ref().map(|l| *l.as_ref())
+    }
+
+    fn get_dev_major(&self) -> Option<u32> {
+        self.lxdev.as_ref().map(|lxdev| lxdev.major)
+    }
+
+    fn get_dev_minor(&self) -> Option<u32> {
+        self.lxdev.as_ref().map(|lxdev| lxdev.minor)
+    }
+
+    fn set_uid(&mut self, uid: u32) {
+        self.lxuid = Some(Cow::Owned(uid));
+    }
+
+    fn set_gid(&mut self, gid: u32) {
+        self.lxgid = Some(Cow::Owned(gid));
+    }
+
+    fn set_mode(&mut self, mode: u32) {
+        self.lxmod = Some(Cow::Owned(mode));
+    }
+
+    fn set_dev_major(&mut self, dev_major: u32) {
+        let mut lxdev = self.lxdev.take().unwrap_or_default();
+        lxdev.to_mut().major = dev_major;
+        self.lxdev = Some(lxdev);
+    }
+
+    fn set_dev_minor(&mut self, dev_minor: u32) {
+        let mut lxdev = self.lxdev.take().unwrap_or_default();
+        lxdev.to_mut().minor = dev_minor;
+        self.lxdev = Some(lxdev);
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Lxdev {
+    pub major: ULONG,
+    pub minor: ULONG,
+}
+
+#[derive(Clone, Debug)]
 pub enum WslfsReparseTag {
     LxSymlink(String),
     LxFifo,
@@ -50,15 +155,25 @@ pub enum WslfsReparseTag {
 
     Unknown,
 }
+impl WslfsReparseTag {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            WslfsReparseTag::LxSymlink(_) => "SYMLINK",
+            WslfsReparseTag::LxFifo => "FIFO",
+            WslfsReparseTag::LxChr => "CHR",
+            WslfsReparseTag::LxBlk => "BLK",
+            WslfsReparseTag::AfUnix => "AF_UNIX",
+            WslfsReparseTag::Unknown => "UNKNOWN",
+        }
+    }
+}
 impl Display for WslfsReparseTag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WslfsReparseTag::LxSymlink(s) => f.write_fmt(format_args!("SYMLINK -> {s}")),
-            WslfsReparseTag::LxFifo => f.write_str("FIFO"),
-            WslfsReparseTag::LxChr => f.write_str("CHR"),
-            WslfsReparseTag::LxBlk => f.write_str("BLK"),
-            WslfsReparseTag::AfUnix => f.write_str("AF_UNIX"),
-            WslfsReparseTag::Unknown => f.write_str("UNKNOWN"),
+        let type_name = self.type_name();
+        if let WslfsReparseTag::LxSymlink(s) = self {
+            f.write_fmt(format_args!("{type_name} -> {s}"))
+        } else {
+            f.write_str(type_name)
         }
     }
 }
@@ -82,81 +197,42 @@ pub fn parse_reparse_tag(reparse_tag: DWORD, file_handle: HANDLE) -> Result<Wslf
     })
 }
 
-unsafe fn read_reparse_point_inner(file_handle: HANDLE, buf: &mut Vec<u8>) -> Option<Error> {
-    let mut bytes_returned: u32 = 0;
-    if DeviceIoControl(
-        file_handle,
-        FSCTL_GET_REPARSE_POINT,
-        NULL,
-        0,
-        transmute(buf.as_mut_ptr()),
-        buf.len() as DWORD,
-        &mut bytes_returned,
-        transmute(NULL),
-    ) != 0 {
-        //dbg!(buf.len(), bytes_returned);
-        buf.truncate(bytes_returned as usize);
-        return None;
-    }
-    let err = Error::last_os_error();
-    //dbg!(err.raw_os_error());
-    return Some(err);
-}
-
-unsafe fn read_reparse_point(file_handle: HANDLE) -> Result<Vec<u8>> {
-    // a reasonable init buf size 64
-    let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + 36;
-    let mut buf = vec![0; buf_size];
-    match read_reparse_point_inner(file_handle, &mut buf) {
-        None => return Ok(buf),
-        Some(err) => {
-            match err.raw_os_error() {
-                Some(os_error) if os_error == ERROR_MORE_DATA as i32 => {
-                    // retry with new buf
-                    let reparse_buf = buf.as_ptr() as *const REPARSE_GUID_DATA_BUFFER;
-                    // larger in most case
-                    let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + (*reparse_buf).ReparseDataLength as usize;
-                    let mut buf = vec![0; buf_size];
-                    match read_reparse_point_inner(file_handle, &mut buf) {
-                        None => return Ok(buf),
-                        Some(err) => {
-                            println!("[ERROR] DeviceIoControl, Cannot read symlink from reparse_point data");
-                            return Err(err);
-                        }
-                    }
-                },
-                _ => {
-                    println!("[ERROR] DeviceIoControl, Cannot read symlink from reparse_point data");
-                    return Err(err);
-                }
-            }
-        },
-    }
+#[derive(Debug, Default)]
+#[repr(C)]
+struct ReparseDataBufferLxSymlink {
+    reparse_tag: ULONG,
+    reparse_data_length: USHORT,
+    reserved: USHORT,
+    tag: ULONG,
+    link: [UCHAR; 1],
 }
 
 unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
-    let link_buf = read_reparse_point(file_handle)?;
+    let raw_buf = crate::ea_io::read_reparse_point(file_handle)?;
 
-    let reparse_buf: &REPARSE_DATA_BUFFER = transmute(link_buf.as_ptr());
+    let data_idx = offset_of!(ReparseDataBufferLxSymlink, tag);
+    let link_idx = offset_of!(ReparseDataBufferLxSymlink, link);
+
+    // min size is 12, with a empty link, do not use `size_of::<REPARSE_DATA_BUFFER_LX_SYMLINK>()`
+    //dbg!(raw_buf.len(), offset_of!(REPARSE_DATA_BUFFER_LX_SYMLINK, Link));
+    assert!(raw_buf.len() >= link_idx);
 
     //1d 00 00 a0 // ReparseTag = 0xA000001D
     //05 00 00 00 // ReparseDataLength = 5, Reserved = 0x0000
     //02 00 00 00 // Tag = 0x00000002
     //78          // link_name = 'x' UTF-8 no null
-
-    let data_idx = size_of_val(&reparse_buf.ReparseTag) + size_of_val(&reparse_buf.ReparseDataLength) + size_of_val(&reparse_buf.Reserved);
-    let data_len = reparse_buf.ReparseDataLength as usize;
-    let str_idx = data_idx + 4;
     
+    let reparse_buf: &ReparseDataBufferLxSymlink = transmute(raw_buf.as_ptr());
+
+    let data_len = reparse_buf.reparse_data_length as usize;
+
     //println!("data_len={}, bytes_len={}", data_len, bytes_len);
-    assert_eq!(reparse_buf.ReparseTag, IO_REPARSE_TAG_LX_SYMLINK);
-    assert!(data_idx + data_len <= link_buf.len());
-    assert_eq!(&link_buf[data_idx..str_idx], [2, 0, 0, 0]);
+    assert_eq!(reparse_buf.reparse_tag, IO_REPARSE_TAG_LX_SYMLINK);
+    assert!(data_idx + data_len <= raw_buf.len());
+    assert_eq!(reparse_buf.tag, 0x00000002); // QUESTION: how about a BE machine?
 
-    let data_str = &link_buf[str_idx..(data_idx + data_len)];
-    let link_name = String::from_utf8_lossy(data_str).to_string();
+    let link_buf = &raw_buf[link_idx..(data_idx + data_len)];
+    let link = String::from_utf8_lossy(link_buf).to_string();
 
-    return Ok(link_name);
+    return Ok(link);
 }
-
-
