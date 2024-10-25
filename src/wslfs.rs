@@ -64,6 +64,11 @@ impl<'a> Display for WslfsParsed<'a> {
 
         if self.lx_dot_ea.len() > 0 {
             f.write_str("Linux extended attributes(LX.*):\n")?;
+            for l in &self.lx_dot_ea {
+                let name = lx_dot_ea_name_display(&l.name);
+                let value = lx_dot_ea_value_display(&l.value);
+                f.write_fmt(format_args!("  {:26}{}\n", name, value))?;
+            }
         }
         Ok(())
     }
@@ -78,6 +83,8 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
             None
         };
 
+        p.lx_dot_ea = vec![];
+
         for ea in ea_parsed {
             if ea.name == LXUID {
                 p.lxuid = Some(Cow::Borrowed(ea.get_ea::<ULONG>()));
@@ -87,6 +94,13 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
                 p.lxmod = Some(Cow::Borrowed(ea.get_ea::<ULONG>()));
             } else if ea.name == LXDEV {
                 p.lxdev = Some(Cow::Borrowed(ea.get_ea::<Lxdev>()));
+            } else if ea.name.starts_with(LX_DOT) {
+                // TODO convert
+                p.lx_dot_ea.push(EaEntry {
+                    flags: ea.flags,
+                    name: ea.name[LX_DOT.len()..].into(),
+                    value: ea.value[4..].into(),
+                });
             }
         }
 
@@ -235,4 +249,16 @@ unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
     let link = String::from_utf8_lossy(link_buf).to_string();
 
     return Ok(link);
+}
+
+// TODO:  Upper aSCII, should be converted before display
+fn lx_dot_ea_name_display(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+fn lx_dot_ea_value_display<'a>(value: &'a [u8]) -> Cow<'a, str> {
+    match std::str::from_utf8(value) {
+        Ok(s) => Cow::Borrowed(s),
+        Err(_) => Cow::Owned(value.escape_ascii().to_string()),
+    }
 }

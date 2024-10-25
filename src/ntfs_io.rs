@@ -4,9 +4,10 @@ use std::io::{Error, Result};
 use ntapi::ntioapi::*;
 use winapi::shared::minwindef::DWORD;
 use winapi::shared::ntdef::*;
+use winapi::um::fileapi::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
 use winapi::um::ioapiset::DeviceIoControl;
 use winapi::shared::winerror::ERROR_MORE_DATA;
-use winapi::um::winioctl::FSCTL_GET_REPARSE_POINT;
+use winapi::um::winioctl::{FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
 use winapi::um::winnt::REPARSE_GUID_DATA_BUFFER;
 
 pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
@@ -33,7 +34,7 @@ pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
 
     let nt_status = NtQueryEaFile(
         file_handle,
-        transmute(&mut isb), 
+        &mut isb,
         transmute(buf.as_mut_ptr()),
         ea_info.EaSize,
         FALSE, // read all ea entries to buffer
@@ -115,4 +116,32 @@ pub unsafe fn read_reparse_point(file_handle: HANDLE) -> Result<Vec<u8>> {
             }
         },
     }
+}
+
+pub unsafe fn write_reparse_point(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
+    let mut bytes_returned: u32 = 0;
+    if DeviceIoControl(
+        file_handle,
+        FSCTL_SET_REPARSE_POINT,
+        transmute(buf.as_ptr()),
+        buf.len() as DWORD,
+        NULL,
+        0,
+        &mut bytes_returned,
+        transmute(NULL),
+    ) != 0 {
+        return Ok(());
+    }
+    let err = Error::last_os_error();
+    //dbg!(err.raw_os_error());
+    return Err(err);
+}
+
+pub unsafe fn read_file_info(file_handle: HANDLE) -> Result<BY_HANDLE_FILE_INFORMATION> {
+    let mut file_info = BY_HANDLE_FILE_INFORMATION::default();
+    if GetFileInformationByHandle(file_handle, &mut file_info as *mut _) == 0 {
+        println!("[ERROR] GetFileInformationByHandle");
+        return Err(Error::last_os_error());
+    }
+    return Ok(file_info);
 }

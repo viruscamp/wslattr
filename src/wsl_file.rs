@@ -36,8 +36,6 @@ pub trait WslFileAttributes<'a> : Sized {
 pub struct WslFile {
     pub file_name: UNICODE_STRING,
     pub file_handle: HANDLE,
-    pub isb: IO_STATUS_BLOCK,
-    pub oa: OBJECT_ATTRIBUTES,
 
     pub ea_buffer: Option<Vec<u8>>,
     pub reparse_tag: Option<DWORD>,
@@ -48,9 +46,7 @@ impl Default for WslFile {
         Self {
             file_name: Default::default(),
             file_handle: NULL,
-            isb: Default::default(),
-            oa: Default::default(),
-            ea_buffer: Default::default(),
+            ea_buffer: None,
             reparse_tag: None,
         }
     }
@@ -71,6 +67,9 @@ impl<'a> Drop for WslFile {
 pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
     let mut wsl_file = WslFile::default();
 
+    let mut isb = IO_STATUS_BLOCK::default();
+    let mut oa = OBJECT_ATTRIBUTES::default();
+
     let nt_status = RtlDosPathNameToNtPathName_U_WithStatus(
         transmute(U16CString::from_os_str_unchecked(path.as_os_str()).as_ptr()),
         &mut wsl_file.file_name,
@@ -83,7 +82,7 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
     }
 
     InitializeObjectAttributes(
-        &mut wsl_file.oa,
+        &mut oa,
         &mut wsl_file.file_name,
         OBJ_CASE_INSENSITIVE | OBJ_IGNORE_IMPERSONATED_DEVICEMAP, // donot use OBJ_DONT_REPARSE as it will stop at C:
         NULL,
@@ -93,8 +92,8 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
     let nt_status = NtOpenFile(
         &mut wsl_file.file_handle,
         FILE_GENERIC_READ, // includes the required FILE_READ_EA access_mask!
-        &mut wsl_file.oa,
-        &mut wsl_file.isb,
+        &mut oa,
+        &mut isb,
         FILE_SHARE_READ,
         FILE_SYNCHRONOUS_IO_NONALERT
     );
@@ -109,8 +108,8 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
             let nt_status = NtOpenFile(
                 &mut wsl_file.file_handle,
                 STANDARD_RIGHTS_READ | FILE_READ_ATTRIBUTES | FILE_READ_EA | FILE_READ_DATA | SYNCHRONIZE, // FILE_GENERIC_READ without FILE_READ_DATA
-                &mut wsl_file.oa,
-                &mut wsl_file.isb,
+                &mut oa,
+                &mut isb,
                 FILE_SHARE_READ,
                 FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT
             );
@@ -136,13 +135,4 @@ pub unsafe fn open_handle(path: &Path) -> Result<WslFile> {
     }
     wsl_file.ea_buffer = crate::ntfs_io::read_ea(wsl_file.file_handle)?;
     return Ok(wsl_file);
-}
-
-unsafe fn read_file_info(file_handle: HANDLE) -> Result<BY_HANDLE_FILE_INFORMATION> {
-    let mut file_info = BY_HANDLE_FILE_INFORMATION::default();
-    if GetFileInformationByHandle(file_handle, &mut file_info as *mut _) == 0 {
-        println!("[ERROR] GetFileInformationByHandle");
-        return Err(Error::last_os_error());
-    }
-    return Ok(file_info);
 }

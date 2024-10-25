@@ -115,13 +115,14 @@ impl<'a> EaEntry<'a> {
     }
 }
 
-/// 12, packed size, could not be used
+/// 12, aligned size, could not be used
 #[allow(dead_code)] 
 const EA_BASE_SIZE_ALIGNED: usize = size_of::<FILE_FULL_EA_INFORMATION>();
 /// 9, use this
 const EA_BASE_SIZE_RAW: usize = size_of::<ULONG>() + size_of::<UCHAR>() + size_of::<UCHAR>() + size_of::<USHORT>() + size_of::<UCHAR>();
 const EA_ALIGN: usize = size_of::<ULONG>();
 
+// aligned with 4, min data size is 11, min size is 12
 fn ea_entry_size(pea: &FILE_FULL_EA_INFORMATION) -> usize {
     ea_entry_size_inner(pea.EaNameLength, pea.EaValueLength)
 }
@@ -139,14 +140,14 @@ pub unsafe fn parse_ea(buf: &[u8]) -> EaParsed {
     let mut ea_ptr = buf.as_ptr();
     
     loop {
+        // 11 is min actual size of EA that can be set with EaNameLength==1 and EaValueLength==1
+        // but read buf is 12 in length
+        assert!(ea_ptr.add(size_of::<FILE_FULL_EA_INFORMATION>()) <= buf_range.end);
         let pea: &FILE_FULL_EA_INFORMATION = transmute(ea_ptr);
-
-        assert!(buf.len() >= size_of::<FILE_FULL_EA_INFORMATION>());
-
         let pea_end = ea_ptr.add(ea_entry_size(pea));
 
         // invalid ea data may cause read overflow
-        assert!(pea_end <= buf_range.end);        
+        assert!(pea_end <= buf_range.end);
 
         let pname = &pea.EaName as *const i8 as *const u8;
         let name = &*slice_from_raw_parts(pname, pea.EaNameLength as usize);

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt::Display};
+use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of, slice_from_raw_parts}};
 
 use ntapi::winapi::shared::minwindef::*;
 use winapi::shared::basetsd::ULONG64;
@@ -7,6 +7,43 @@ use crate::{ea_parse::EaParsed, time_utils::TimeTWithNano, wsl_file::{WslFile, W
 
 pub const LXATTRB: &'static str = "LXATTRB";
 pub const LXXATTR: &'static str = "LXXATTR";
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct EaLxattrbV1 {
+    flags: USHORT,            // 0
+    version: USHORT,          // 1
+
+    pub st_mode: ULONG,       // Mode bit mask constants: https://msdn.microsoft.com/en-us/library/3kyc8381.aspx
+    pub st_uid: ULONG,        // Numeric identifier of user who owns file (Linux-specific).
+    pub st_gid: ULONG,        // Numeric identifier of group that owns the file (Linux-specific)
+    pub st_rdev: ULONG,       // Drive number of the disk containing the file.
+    pub st_atime_nsec: ULONG, // Time of last access of file (nano-seconds).
+    pub st_mtime_nsec: ULONG, // Time of last modification of file (nano-seconds).
+    pub st_ctime_nsec: ULONG, // Time of creation of file (nano-seconds).
+    pub st_atime: ULONG64,    // Time of last access of file.
+    pub st_mtime: ULONG64,    // Time of last modification of file.
+    pub st_ctime: ULONG64,    // Time of creation of file.
+}
+
+impl Default for EaLxattrbV1 {
+    fn default() -> Self {
+        Self {
+            flags: 0,
+            version: 1,
+            st_mode: 0o0644,
+            st_uid: 0,
+            st_gid: 0,
+            st_rdev: 0,
+            st_atime_nsec: 0,
+            st_mtime_nsec: 0,
+            st_ctime_nsec: 0,
+            st_atime: 0,
+            st_mtime: 0,
+            st_ctime: 0,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct LxfsParsed<'a> {
@@ -76,6 +113,8 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
 
         p.lxattrb = ea_parsed.get_ea::<EaLxattrbV1>(LXATTRB).map(|x| Cow::Borrowed(x));
 
+        p.lxxattr = LxxattrParsed::try_load(ea_parsed);
+
         Ok(p)
     }
     
@@ -132,9 +171,18 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
     }
 }
 
+#[derive(Default)]
 pub struct LxxattrParsed<'a> {
     entries: Vec<LxxattrEntry<'a>>,
     changed: bool,
+}
+
+impl<'a> LxxattrParsed<'a> {
+    fn try_load(ea_parsed: &'a EaParsed) -> Option<Self> {
+        ea_parsed.get_ea_raw(LXXATTR).map(|data| {
+            unsafe { parse_lxxattr(data) }
+        })
+    }
 }
 
 struct LxxattrEntry<'a> {
@@ -142,39 +190,85 @@ struct LxxattrEntry<'a> {
     pub value: Cow<'a, [u8]>,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct EaLxattrbV1 {
-    flags: USHORT,            // 0
-    version: USHORT,          // 1
-
-    pub st_mode: ULONG,       // Mode bit mask constants: https://msdn.microsoft.com/en-us/library/3kyc8381.aspx
-    pub st_uid: ULONG,        // Numeric identifier of user who owns file (Linux-specific).
-    pub st_gid: ULONG,        // Numeric identifier of group that owns the file (Linux-specific)
-    pub st_rdev: ULONG,       // Drive number of the disk containing the file.
-    pub st_atime_nsec: ULONG, // Time of last access of file (nano-seconds).
-    pub st_mtime_nsec: ULONG, // Time of last modification of file (nano-seconds).
-    pub st_ctime_nsec: ULONG, // Time of creation of file (nano-seconds).
-    pub st_atime: ULONG64,    // Time of last access of file.
-    pub st_mtime: ULONG64,    // Time of last modification of file.
-    pub st_ctime: ULONG64,    // Time of creation of file.
+/// |Offset      |Size|Note|
+/// |------------|----|----|
+/// |0           |4   |Always 00 00 01 00|
+/// |4           |4   |Next entry relative offset. Zero if last. (A)|
+/// |8           |2   |Length of xattr value. (B)|
+/// |10          |1   |Length of xattr name. (C)|
+/// |11          |C   |xattr name. UTF-8. No null terminator.|
+/// |11 + C      |B   |xattr value.|
+/// |11 + B + C  |1   |Unknown. Even if change to a random value, WSL does not worry. should be aligned|
+/// |4 + A       |    |Repeat above six elements.|
+struct LxxattrEntryRaw {
+    next_entry_offset: u32,
+    value_length: u16,
+    name_length: u8,
+    /// xattr name. UTF-8. No null terminator.
+    name: [u8; 0],
+    /// xattr value.
+    value: [u8; 0],
 }
 
-impl Default for EaLxattrbV1 {
-    fn default() -> Self {
-        Self {
-            flags: 0,
-            version: 1,
-            st_mode: 0o0644,
-            st_uid: 0,
-            st_gid: 0,
-            st_rdev: 0,
-            st_atime_nsec: 0,
-            st_mtime_nsec: 0,
-            st_ctime_nsec: 0,
-            st_atime: 0,
-            st_mtime: 0,
-            st_ctime: 0,
+#[repr(C)]
+struct LxxattrRaw {
+    flags: USHORT,            // 0
+    version: USHORT,          // 1
+    entries: LxxattrEntryRaw,
+}
+
+const LXXATTR_ALIGN: usize = size_of::<u32>();
+
+fn lxxattr_entry_size(pea: &LxxattrEntryRaw) -> usize {
+    lxxattr_entry_size_inner(pea.name_length, pea.value_length)
+}
+
+fn lxxattr_entry_size_inner(name_len: UCHAR, value_len: USHORT) -> usize {
+    let data_len = offset_of!(LxxattrEntryRaw, name) + name_len as usize + value_len as usize;
+    let full_len = (data_len + 1) / LXXATTR_ALIGN * LXXATTR_ALIGN;
+    return full_len;
+}
+
+pub unsafe fn parse_lxxattr<'a>(buf: impl AsRef<[u8]> + 'a) -> LxxattrParsed<'a> {
+    let buf = buf.as_ref();
+
+    let mut entries = vec![];
+
+    assert!(buf.len() >= size_of::<LxxattrRaw>());
+
+    let buf_range = buf.as_ptr_range();
+    let praw: &LxxattrRaw = transmute(buf.as_ptr());
+    assert_eq!(praw.flags, 0);
+    assert_eq!(praw.version, 1);
+    let mut ea_ptr = addr_of!(praw.entries) as *const u8;
+    
+    loop {
+        assert!(ea_ptr.add(size_of::<LxxattrEntryRaw>()) <= buf_range.end);
+        let pea: &LxxattrEntryRaw = transmute(ea_ptr);
+        let pea_end = ea_ptr.add(lxxattr_entry_size(pea));
+
+        // invalid ea data may cause read overflow
+        assert!(pea_end <= buf_range.end);
+
+        let pname = &pea.name as *const u8;
+        let name = &*slice_from_raw_parts(pname, pea.name_length as usize);
+
+        let pvalue =  pname.add(pea.name_length as usize);
+        let value = &*slice_from_raw_parts(pvalue, pea.value_length as usize);
+
+        entries.push(LxxattrEntry {
+            name: String::from_utf8_lossy(name),
+            value: value.into(),
+        });
+
+        if pea.next_entry_offset == 0 {
+            break;
         }
+        ea_ptr = ea_ptr.add(pea.next_entry_offset as usize);
+    }
+    
+    LxxattrParsed {
+        entries,
+        changed: false,
     }
 }
