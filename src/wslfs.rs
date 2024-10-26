@@ -75,6 +75,15 @@ impl<'a> Display for WslfsParsed<'a> {
 }
 
 impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
+    fn maybe(&self) -> bool {
+        self.lxuid.is_some() ||
+        self.lxgid.is_some() ||
+        self.lxmod.is_some() ||
+        self.lxdev.is_some() ||
+        self.reparse_tag.is_some() ||
+        !self.lx_dot_ea.is_empty()
+    }
+
     fn try_load(wsl_file: &'a WslFile, ea_parsed: &'a EaParsed) -> Result<Self> {
         let mut p = Self::default();
         p.reparse_tag = if let Some(t) = wsl_file.reparse_tag {

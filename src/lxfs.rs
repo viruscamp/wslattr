@@ -87,8 +87,13 @@ impl<'a> Display for LxfsParsed<'a> {
             f.write_fmt(format_args!("{:28}-> {}\n", "  Last file modification:", TimeTWithNano::new(l.st_mtime, l.st_mtime_nsec)))?;
         }
 
-        if let Some(l) = &self.lxxattr {
+        if let Some(lxxattr) = &self.lxxattr {
             f.write_str("Linux extended attributes(LXXATTR):\n")?;
+            for l in &lxxattr.entries {
+                let name = lxxattr_name_display(&l.name);
+                let value = lxxattr_value_display(&l.value);
+                f.write_fmt(format_args!("  {:26}{}\n", name, value))?;
+            }
         }
         Ok(())
     }
@@ -108,6 +113,11 @@ const fn make_dev(ma: u32, mi: u32) -> u32 {
 }
 
 impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
+    fn maybe(&self) -> bool {
+        self.lxattrb.is_some() ||
+        self.lxxattr.is_some()
+    }
+
     fn try_load(wsl_file: &'a WslFile, ea_parsed: &'a EaParsed) -> std::io::Result<Self> {
         let mut p = Self::default();
 
@@ -270,5 +280,17 @@ pub unsafe fn parse_lxxattr<'a>(buf: impl AsRef<[u8]> + 'a) -> LxxattrParsed<'a>
     LxxattrParsed {
         entries,
         changed: false,
+    }
+}
+
+// TODO:  Upper aSCII, should be converted before display
+fn lxxattr_name_display(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+fn lxxattr_value_display<'a>(value: &'a [u8]) -> Cow<'a, str> {
+    match std::str::from_utf8(value) {
+        Ok(s) => Cow::Borrowed(s),
+        Err(_) => Cow::Owned(value.escape_ascii().to_string()),
     }
 }

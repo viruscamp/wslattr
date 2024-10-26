@@ -20,6 +20,8 @@ pub type HANDLE = winapi::shared::ntdef::HANDLE;
 pub trait WslFileAttributes<'a> : Sized {
     fn try_load(wsl_file: &'a WslFile, ea_parsed: &'a EaParsed) -> Result<Self>;
 
+    fn maybe(&self) -> bool;
+
     fn get_uid(&self) -> Option<u32>;
     fn get_gid(&self) -> Option<u32>;
     fn get_mode(&self) -> Option<u32>;
