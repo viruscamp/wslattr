@@ -3,7 +3,7 @@ use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of,
 use ntapi::winapi::shared::minwindef::*;
 use winapi::shared::basetsd::ULONG64;
 
-use crate::{ea_parse::EaParsed, time_utils::TimeTWithNano, wsl_file::{WslFile, WslFileAttributes}};
+use crate::{ea_parse::EaParsed, ntfs_io::read_data, time_utils::TimeTWithNano, wsl_file::{WslFile, WslFileAttributes}};
 
 pub const LXATTRB: &'static str = "LXATTRB";
 pub const LXXATTR: &'static str = "LXXATTR";
@@ -74,17 +74,17 @@ impl<'a> Display for LxfsParsed<'a> {
 
         if let Some(l) = &self.lxattrb {
             f.write_str("LXATTRB:\n")?;
-            f.write_fmt(format_args!("{:28}-> {}\n", "  Flags:", l.flags))?;
-            f.write_fmt(format_args!("{:28}-> {}\n", "  Version:", l.version))?;
-            f.write_fmt(format_args!("{:28}-> {} {}\n", "  Ownership:", l.st_uid, l.st_gid))?;
-            f.write_fmt(format_args!("{:28}-> {:o}\n", "  Mode:", l.st_mode))?;
-            f.write_fmt(format_args!("{:28}-> {:o}\n", "  Access:", l.st_mode))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Flags:", l.flags))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Version:", l.version))?;
+            f.write_fmt(format_args!("{:28}{} {}\n", "  Ownership:", l.st_uid, l.st_gid))?;
+            f.write_fmt(format_args!("{:28}{:o}\n", "  Mode:", l.st_mode))?;
+            f.write_fmt(format_args!("{:28}{:o}\n", "  Access:", l.st_mode))?;
             if l.st_rdev != 0 {
-                f.write_fmt(format_args!("{:28}-> {}, {}\n", "  Device type:", dev_major(l.st_rdev), dev_minor(l.st_rdev)))?;
+                f.write_fmt(format_args!("{:28}{}, {}\n", "  Device type:", dev_major(l.st_rdev), dev_minor(l.st_rdev)))?;
             }
-            f.write_fmt(format_args!("{:28}-> {}\n", "  Last status change:", TimeTWithNano::new(l.st_ctime, l.st_ctime_nsec)))?;
-            f.write_fmt(format_args!("{:28}-> {}\n", "  Last file access:", TimeTWithNano::new(l.st_atime, l.st_atime_nsec)))?;
-            f.write_fmt(format_args!("{:28}-> {}\n", "  Last file modification:", TimeTWithNano::new(l.st_mtime, l.st_mtime_nsec)))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Last status change:", TimeTWithNano::new(l.st_ctime, l.st_ctime_nsec)))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Last file access:", TimeTWithNano::new(l.st_atime, l.st_atime_nsec)))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Last file modification:", TimeTWithNano::new(l.st_mtime, l.st_mtime_nsec)))?;
         }
 
         if let Some(lxxattr) = &self.lxxattr {
@@ -112,6 +112,13 @@ const fn make_dev(ma: u32, mi: u32) -> u32 {
     (ma << MINORBITS) | mi
 }
 
+const S_IFLNK: u32 = 0o0120000;		/* symbolic link */
+
+/* symbolic link */
+const fn S_ISLNK(m: u32) -> bool {
+    (m & 0o0170000) == S_IFLNK
+}
+
 impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
     fn maybe(&self) -> bool {
         self.lxattrb.is_some() ||
@@ -122,6 +129,14 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
         let mut p = Self::default();
 
         p.lxattrb = ea_parsed.get_ea::<EaLxattrbV1>(LXATTRB).map(|x| Cow::Borrowed(x));
+
+        if let Some(mode) = p.get_mode() {
+            if S_ISLNK(mode) {
+                let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
+                let symlink = String::from_utf8(buf).unwrap();
+                p.symlink = Some(symlink);
+            }
+        }
 
         p.lxxattr = LxxattrParsed::try_load(ea_parsed);
 

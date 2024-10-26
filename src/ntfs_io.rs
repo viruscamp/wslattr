@@ -2,9 +2,9 @@ use std::mem::transmute;
 use std::io::{Error, Result};
 
 use ntapi::ntioapi::*;
-use winapi::shared::minwindef::DWORD;
+use winapi::shared::minwindef::{DWORD, MAX_PATH};
 use winapi::shared::ntdef::*;
-use winapi::um::fileapi::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+use winapi::um::fileapi::{GetFileInformationByHandle, ReadFile, BY_HANDLE_FILE_INFORMATION};
 use winapi::um::ioapiset::DeviceIoControl;
 use winapi::shared::winerror::ERROR_MORE_DATA;
 use winapi::um::winioctl::{FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
@@ -135,6 +135,28 @@ pub unsafe fn write_reparse_point(file_handle: HANDLE, buf: &[u8]) -> Result<()>
     let err = Error::last_os_error();
     //dbg!(err.raw_os_error());
     return Err(err);
+}
+
+pub unsafe fn read_data(file_handle: HANDLE) -> Result<Vec<u8>> {
+    let mut read_size: DWORD = 0;
+    let mut buf = vec![0u8; MAX_PATH];
+    if ReadFile(
+        file_handle,
+        transmute(buf.as_mut_ptr()),
+        buf.len() as DWORD,
+        &mut read_size,
+        transmute(NULL),
+    ) == 0 {
+        let err = Error::last_os_error();
+        println!("[ERROR] ReadFile: {}, Cannot read symlink from file content\n", &err);
+        return Err(err);
+    }
+    buf.shrink_to_fit();
+    return Ok(buf);
+}
+
+pub unsafe fn write_data(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
+    todo!()
 }
 
 pub unsafe fn read_file_info(file_handle: HANDLE) -> Result<BY_HANDLE_FILE_INFORMATION> {
