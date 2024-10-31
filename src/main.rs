@@ -68,10 +68,14 @@ pub fn try_load_distro<S: AsRef<str>>(distro_from_arg: Option<S>) -> Option<Dist
         })
     }))
     .or_else(|| {
-        println!("try load distro from current dir");
-        try_get_distro_from_current_dir().and_then(|n| {
-            distro::try_load(&n.to_string_lossy())
-        })
+        match std::env::current_dir() {
+            Ok(cd) => {
+                println!("try load distro from current dir: {}", &cd.display());
+                try_get_distro_from_unc_path(&cd)
+                .and_then(|n| distro::try_load(&n.to_string_lossy()))                
+            },
+            Err(_) => None,
+        }
     })
     .or_else(|| {
         println!("try load distro from reg");

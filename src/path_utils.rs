@@ -1,4 +1,3 @@
-use std::env::current_dir;
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, Prefix};
 
@@ -45,8 +44,4 @@ pub fn try_get_distro_from_unc_path(abs_path: &Path) -> Option<OsString> {
         .as_ref()
         .and_then(try_get_distro_from_unc_prefix)
         .map(|s| s.to_owned())
-}
-
-pub fn try_get_distro_from_current_dir() -> Option<OsString> {
-    try_get_distro_from_unc_path(&current_dir().expect("invalid current dir"))
 }
