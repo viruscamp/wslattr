@@ -3,7 +3,7 @@ use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of,
 use ntapi::winapi::shared::minwindef::*;
 use winapi::shared::basetsd::ULONG64;
 
-use crate::{ea_parse::EaParsed, ntfs_io::read_data, time_utils::TimeTWithNano, wsl_file::{WslFile, WslFileAttributes}};
+use crate::{ea_parse::{force_cast, EaEntryRaw, EaParsed}, ntfs_io::read_data, time_utils::TimeTWithNano, wsl_file::{WslFile, WslFileAttributes}};
 
 pub const LXATTRB: &'static str = "LXATTRB";
 pub const LXXATTR: &'static str = "LXXATTR";
@@ -125,20 +125,26 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
         self.lxxattr.is_some()
     }
 
-    fn try_load(wsl_file: &'a WslFile, ea_parsed: &'a EaParsed) -> std::io::Result<Self> {
+    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b EaParsed<'a>) -> std::io::Result<Self> {
         let mut p = Self::default();
 
-        p.lxattrb = ea_parsed.get_ea::<EaLxattrbV1>(LXATTRB).map(|x| Cow::Borrowed(x));
-
-        if let Some(mode) = p.get_mode() {
-            if S_ISLNK(mode) {
-                let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
-                let symlink = String::from_utf8(buf).unwrap();
-                p.symlink = Some(symlink);
+        for EaEntryRaw { name, value, flags: _ } in ea_parsed {
+            let name = name.as_ref();
+            if name == LXATTRB.as_bytes() {
+                p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));
+                
+                if let Some(mode) = p.get_mode() {
+                    if S_ISLNK(mode) {
+                        let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
+                        let symlink = String::from_utf8(buf).unwrap();
+                        p.symlink = Some(symlink);
+                    }
+                }
+            } else if name == LXXATTR.as_bytes() {
+                let lxxattr_parsed = unsafe { parse_lxxattr(value.as_ref()) };
+                p.lxxattr = Some(lxxattr_parsed);
             }
         }
-
-        p.lxxattr = LxxattrParsed::try_load(ea_parsed);
 
         Ok(p)
     }
@@ -199,19 +205,10 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
 #[derive(Default)]
 pub struct LxxattrParsed<'a> {
     entries: Vec<LxxattrEntry<'a>>,
-    changed: bool,
-}
-
-impl<'a> LxxattrParsed<'a> {
-    fn try_load(ea_parsed: &'a EaParsed) -> Option<Self> {
-        ea_parsed.get_ea_raw(LXXATTR).map(|data| {
-            unsafe { parse_lxxattr(data) }
-        })
-    }
 }
 
 struct LxxattrEntry<'a> {
-    pub name: Cow<'a, str>,
+    pub name: Cow<'a, [u8]>,
     pub value: Cow<'a, [u8]>,
 }
 
@@ -254,7 +251,7 @@ fn lxxattr_entry_size_inner(name_len: UCHAR, value_len: USHORT) -> usize {
     return full_len;
 }
 
-pub unsafe fn parse_lxxattr<'a>(buf: impl AsRef<[u8]> + 'a) -> LxxattrParsed<'a> {
+pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> LxxattrParsed<'a> {
     let buf = buf.as_ref();
 
     let mut entries = vec![];
@@ -282,8 +279,8 @@ pub unsafe fn parse_lxxattr<'a>(buf: impl AsRef<[u8]> + 'a) -> LxxattrParsed<'a>
         let value = &*slice_from_raw_parts(pvalue, pea.value_length as usize);
 
         entries.push(LxxattrEntry {
-            name: String::from_utf8_lossy(name),
-            value: value.into(),
+            name: Cow::Borrowed(name),
+            value: Cow::Borrowed(value),
         });
 
         if pea.next_entry_offset == 0 {
@@ -294,13 +291,12 @@ pub unsafe fn parse_lxxattr<'a>(buf: impl AsRef<[u8]> + 'a) -> LxxattrParsed<'a>
     
     LxxattrParsed {
         entries,
-        changed: false,
     }
 }
 
-// TODO:  Upper aSCII, should be converted before display
-fn lxxattr_name_display(name: &str) -> String {
-    name.to_ascii_lowercase()
+// TODO:  Upper ASCII, should be converted before display
+fn lxxattr_name_display(name: impl AsRef<[u8]>) -> String {
+    String::from_utf8_lossy(name.as_ref()).to_ascii_lowercase()
 }
 
 fn lxxattr_value_display<'a>(value: &'a [u8]) -> Cow<'a, str> {

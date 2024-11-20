@@ -1,5 +1,6 @@
-use std::mem::transmute;
+use std::mem::{offset_of, transmute};
 use std::io::{Error, Result};
+use std::ptr::addr_of;
 
 use ntapi::ntioapi::*;
 use winapi::shared::minwindef::{DWORD, MAX_PATH};
@@ -7,10 +8,11 @@ use winapi::shared::ntdef::*;
 use winapi::um::fileapi::{GetFileInformationByHandle, ReadFile, BY_HANDLE_FILE_INFORMATION};
 use winapi::um::ioapiset::DeviceIoControl;
 use winapi::shared::winerror::ERROR_MORE_DATA;
-use winapi::um::winioctl::{FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
+use winapi::um::winioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
 use winapi::um::winnt::REPARSE_GUID_DATA_BUFFER;
 
-pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
+/// `NtQueryEaFile` can read known EA's, but there are 'LX.LINUX.ATTR.*', so we'd read all.
+pub unsafe fn read_ea_all(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
     let mut isb = IO_STATUS_BLOCK::default();
     let mut ea_info = FILE_EA_INFORMATION::default();
   
@@ -51,6 +53,7 @@ pub unsafe fn read_ea(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
     return Ok(Some(buf));
 }
 
+/// It's safe to save only changed EA's.
 pub unsafe fn write_ea(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
     let mut isb = IO_STATUS_BLOCK::default();
     let nt_status = NtSetEaFile(
@@ -125,6 +128,28 @@ pub unsafe fn write_reparse_point(file_handle: HANDLE, buf: &[u8]) -> Result<()>
         FSCTL_SET_REPARSE_POINT,
         transmute(buf.as_ptr()),
         buf.len() as DWORD,
+        NULL,
+        0,
+        &mut bytes_returned,
+        transmute(NULL),
+    ) != 0 {
+        return Ok(());
+    }
+    let err = Error::last_os_error();
+    //dbg!(err.raw_os_error());
+    return Err(err);
+}
+
+pub unsafe fn delete_reparse_point(file_handle: HANDLE, tag: u32) -> Result<()> {
+    let mut buf = REPARSE_DATA_BUFFER::default();
+    buf.ReparseTag = tag;
+    buf.ReparseDataLength = 0;
+    let mut bytes_returned: u32 = 0;
+    if DeviceIoControl(
+        file_handle,
+        FSCTL_DELETE_REPARSE_POINT,
+        transmute(addr_of!(buf)),
+        offset_of!(REPARSE_DATA_BUFFER, u) as DWORD,
         NULL,
         0,
         &mut bytes_returned,

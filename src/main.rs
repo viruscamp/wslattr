@@ -1,9 +1,10 @@
 use std::path::{self, Path, PathBuf};
 use clap::{arg, command, Parser, Subcommand};
 
+use ea_parse::EaParsed;
 use path_utils::*;
 use distro::Distro;
-use wsl_file::{WslFile, WslFileAttributes};
+use wsl_file::{reopen_to_write, WslFile, WslFileAttributes};
 
 mod distro;
 mod path_utils;
@@ -44,16 +45,24 @@ fn main() {
     let args = Args::parse();
     println!("args: {:?}!", args);
 
-    if let Some(wsl_file) = load_wsl_file(&args.path, args.distro.as_ref()) {
+    if let Some(mut wsl_file) = load_wsl_file(&args.path, args.distro.as_ref()) {
+        if let Some(ea_buffer) = &wsl_file.ea_buffer {
+            let ea_parsed = unsafe { ea_parse::parse_ea(ea_buffer) };
+            print(&wsl_file, &ea_parsed);
+        } else {
+            println!("no EAs exist");
+        }
+
         if args.command == Some(Command::Downgrade) {
+
             if let Some(ea_buffer) = &wsl_file.ea_buffer {
 
                 let mut ea_parsed = unsafe { ea_parse::parse_ea(ea_buffer) };
 
-                let lxattrb = ea_parsed.set_ea(lxfs::LXATTRB, &lxfs::EaLxattrbV1::default());
+                //let lxattrb = ea_parsed.set_ea(lxfs::LXATTRB, &lxfs::EaLxattrbV1::default());
     
-                let ea = ea_parsed.to_buf();
-                unsafe { ntfs_io::write_ea(wsl_file.file_handle, &ea) };
+                //let ea = ea_parsed.to_buf();
+                //unsafe { ntfs_io::write_ea(wsl_file.file_handle, &ea) };
             }
         }
     }
@@ -139,21 +148,17 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
     println!("distro: {:?}", distro);
 
     unsafe {
-        let wsl_file = wsl_file::open_handle(&real_path).expect("failed to open file");
-
-        if let Some(ea_buffer) = &wsl_file.ea_buffer {
-            let ea_parsed = ea_parse::parse_ea(ea_buffer);
-
-            if let Ok(wslfs) = wslfs::WslfsParsed::try_load(&wsl_file, &ea_parsed) {
-                println!("{wslfs}");
-            }
-
-            if let Ok(lxfs) = lxfs::LxfsParsed::try_load(&wsl_file, &ea_parsed) {
-                println!("{lxfs}");
-            }
-        } else {
-            println!("no EAs exist");
-        }
+        let wsl_file = wsl_file::open_handle(&real_path, false).expect("failed to open file");
         return Some(wsl_file);
+    }
+}
+
+fn print(wsl_file: &WslFile, ea_parsed: &EaParsed) {
+    if let Ok(wslfs) = wslfs::WslfsParsed::try_load(&wsl_file, &ea_parsed) {
+        println!("{wslfs}");
+    }
+
+    if let Ok(lxfs) = lxfs::LxfsParsed::try_load(&wsl_file, &ea_parsed) {
+        println!("{lxfs}");
     }
 }
