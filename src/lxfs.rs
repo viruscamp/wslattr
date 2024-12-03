@@ -3,7 +3,10 @@ use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of,
 use ntapi::winapi::shared::minwindef::*;
 use winapi::shared::basetsd::ULONG64;
 
-use crate::{ea_parse::{force_cast, EaEntryRaw, EaParsed}, ntfs_io::read_data, time_utils::TimeTWithNano, wsl_file::{WslFile, WslFileAttributes}};
+use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
+use crate::ntfs_io::read_data;
+use crate::time_utils::TimeTWithNano; 
+use crate::wsl_file::{WslFile, WslFileAttributes};
 
 pub const LXATTRB: &'static str = "LXATTRB";
 pub const LXXATTR: &'static str = "LXXATTR";
@@ -125,10 +128,10 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
         self.lxxattr.is_some()
     }
 
-    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b EaParsed<'a>) -> std::io::Result<Self> {
+    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) -> std::io::Result<Self> {
         let mut p = Self::default();
 
-        for EaEntryRaw { name, value, flags: _ } in ea_parsed {
+        for EaEntry { name, value, flags: _ } in ea_parsed {
             let name = name.as_ref();
             if name == LXATTRB.as_bytes() {
                 p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));

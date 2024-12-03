@@ -63,7 +63,7 @@ pub unsafe fn write_ea(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
         buf.len() as ULONG,
     );
     if ! NT_SUCCESS(nt_status) {
-        println!("[ERROR] NtQueryEaFile: {:#x}", nt_status);
+        println!("[ERROR] NtSetEaFile: {:#x}", nt_status);
         return Err(Error::from_raw_os_error(nt_status));
     }
     Ok(())

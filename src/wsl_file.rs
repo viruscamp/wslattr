@@ -13,12 +13,12 @@ use winapi::um::fileapi::*;
 use winapi::shared::minwindef::DWORD;
 use utfx::U16CString;
 
-use crate::ea_parse::{EaEntryRaw, EaParsed};
+use crate::ea_parse::EaEntryRaw;
 
 pub type HANDLE = winapi::shared::ntdef::HANDLE;
 
 pub trait WslFileAttributes<'a> : Sized {
-    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b EaParsed<'a>) -> Result<Self>;
+    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) -> Result<Self>;
 
     fn maybe(&self) -> bool;
 

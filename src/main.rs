@@ -1,7 +1,7 @@
-use std::path::{self, Path, PathBuf};
+use std::{path::{self, Path, PathBuf}};
 use clap::{arg, command, Parser, Subcommand};
 
-use ea_parse::EaParsed;
+use ea_parse::{EaEntryRaw, EaOut};
 use path_utils::*;
 use distro::Distro;
 use wsl_file::{reopen_to_write, WslFile, WslFileAttributes};
@@ -47,8 +47,10 @@ fn main() {
 
     if let Some(mut wsl_file) = load_wsl_file(&args.path, args.distro.as_ref()) {
         if let Some(ea_buffer) = &wsl_file.ea_buffer {
-            let ea_parsed = unsafe { ea_parse::parse_ea(ea_buffer) };
+            let ea_parsed = ea_parse::parse_ea(ea_buffer);
             print(&wsl_file, &ea_parsed);
+
+            //test_ea_write(&mut wsl_file);
         } else {
             println!("no EAs exist");
         }
@@ -65,6 +67,36 @@ fn main() {
                 //unsafe { ntfs_io::write_ea(wsl_file.file_handle, &ea) };
             }
         }
+    }
+}
+
+fn test_ea_write(wsl_file: &mut WslFile) {
+    let ea_buffer = wsl_file.ea_buffer.as_ref().unwrap();
+    let ea_parsed = ea_parse::parse_ea(ea_buffer);
+
+    let mut ea_out = EaOut::default();
+    for ea in ea_parsed {
+        ea_out.add(&ea);
+    }
+
+    // read ea and construct a new buffer, they should be same
+
+    println!("read_ea_len={} out_ea_len={}", ea_buffer.len(), ea_out.buff.len());
+    assert_eq!(ea_buffer, &ea_out.buff);
+
+    // add, change, delete
+    let mut ea_out = EaOut::default();
+    ea_out.add(&EaEntryRaw {
+        flags: 0,
+        name: "TT".as_bytes(),
+        value: "".as_bytes(),
+    });
+    unsafe {
+        reopen_to_write(wsl_file);
+        for x in &ea_out.buff {
+            print!("{x:0>2x}, ");
+        }
+        ntfs_io::write_ea(wsl_file.file_handle, &ea_out.buff);
     }
 }
 
@@ -153,7 +185,7 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
     }
 }
 
-fn print(wsl_file: &WslFile, ea_parsed: &EaParsed) {
+fn print<'a, 'b>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) {
     if let Ok(wslfs) = wslfs::WslfsParsed::try_load(&wsl_file, &ea_parsed) {
         println!("{wslfs}");
     }

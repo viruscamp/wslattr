@@ -6,7 +6,7 @@ use std::io::Result;
 use winapi::shared::minwindef::{DWORD, UCHAR, ULONG, USHORT};
 use winapi::shared::ntdef::HANDLE;
 
-use crate::ea_parse::{EaEntry, EaParsed};
+use crate::ea_parse::{EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
 use crate::wsl_file::{open_file_inner, WslFile, WslFileAttributes};
 
@@ -28,7 +28,7 @@ pub struct WslfsParsed<'a> {
     pub lxmod: Option<Cow<'a, u32>>,
     pub lxdev: Option<Cow<'a, Lxdev>>,
 
-    pub lx_dot_ea: Vec<EaEntry<'a>>,
+    pub lx_dot_ea: Vec<EaEntryCow<'a>>,
 
     pub reparse_tag: Option<WslfsReparseTag>,
 }
@@ -88,7 +88,7 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
         !self.lx_dot_ea.is_empty()
     }
 
-    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b EaParsed<'a>) -> Result<Self> {
+    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) -> Result<Self> {
         let mut p = Self::default();
         p.reparse_tag = if let Some(t) = wsl_file.reparse_tag {
             Some(parse_reparse_tag(t, wsl_file.file_handle)?)
@@ -100,18 +100,18 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
 
         for ea in ea_parsed {
             if ea.name == LXUID.as_bytes() {
-                p.lxuid = Some(ea.get_ea_cow());
+                p.lxuid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
             } else if ea.name == LXGID.as_bytes() {
-                p.lxgid = Some(ea.get_ea_cow());
+                p.lxgid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
             } else if ea.name == LXMOD.as_bytes() {
-                p.lxmod = Some(ea.get_ea_cow());
+                p.lxmod = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
             } else if ea.name == LXDEV.as_bytes() {
-                p.lxdev = Some(ea.get_ea_cow());
+                p.lxdev = Some(Cow::Owned(ea.get_ea::<Lxdev>().to_owned()));
             } else if ea.name.starts_with(LX_DOT.as_bytes()) {
-                p.lx_dot_ea.push(EaEntry {
+                p.lx_dot_ea.push(EaEntryCow {
                     flags: ea.flags,
-                    name: ea.name.clone(),
-                    value: ea.value.clone(),
+                    name: ea.name.to_owned().into(),
+                    value: ea.value.to_owned().into(),
                 });
             }
         }

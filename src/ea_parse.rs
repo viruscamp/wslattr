@@ -1,54 +1,9 @@
-use std::{borrow::Cow, mem::transmute, ptr::{null, slice_from_raw_parts}};
+use std::{borrow::Cow, mem::{offset_of, transmute}, ptr::{null, slice_from_raw_parts}};
 
 use ntapi::ntioapi::FILE_FULL_EA_INFORMATION;
 use winapi::shared::ntdef::*;
 
-pub struct EaParsed<'a> {
-    entries: Vec<EaEntry<'a>>,
-    changed: bool,
-}
-
-impl<'a, 'b> IntoIterator for &'b EaParsed<'a> {
-    type Item = &'b EaEntry<'a>;
-    type IntoIter = std::slice::Iter<'b, EaEntry<'a>>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.entries.iter()
-    }
-}
-
-impl<'a> Default for EaParsed<'a> {
-    fn default() -> Self {
-        EaParsed {
-            entries: vec![],
-            changed: false,
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! get_or_push {
-    (ea_parsed, name) => {
-        let i = ea_parsed.get_entry(name);
-        if i.is_some() {
-            i
-        } else {
-            ea_parsed.entries.push(EaEntry {
-                flags: 0,
-                name: Cow::Owned(name.to_owned()),
-                value: RefCell::new(vec![].into()),
-            });
-            ea_parsed.entries.last()
-        }.unwrap()
-    };
-}
-
-impl<'a> EaParsed<'a> {
-    pub fn get_entry<'b>(&'b self, name: &str) -> Option<&'b EaEntry<'a>> {
-        self.entries.iter().find(|e| e.name == name.as_bytes())
-    }
-}
-
-pub struct EaEntryRaw<Bytes: AsRef<[u8]>> {
+pub struct EaEntry<Bytes: AsRef<[u8]>> {
     #[allow(dead_code)]
     pub flags: UCHAR,
     /// should be ASCII only, add or delete
@@ -57,46 +12,34 @@ pub struct EaEntryRaw<Bytes: AsRef<[u8]>> {
     pub value: Bytes,
 }
 
+impl<Bytes: AsRef<[u8]>> EaEntry<Bytes> {
+    fn size(&self) -> usize {
+        ea_entry_size_inner(self.name.as_ref().len() as u8, self.value.as_ref().len() as u16)
+    }
+}
+
 pub fn force_cast<T: Sized>(buf: &[u8]) -> &T {
     assert!(buf.len() >= size_of::<T>());
     let data = buf.as_ptr();
     unsafe { &* (data as *const T) }
 }
 
-pub type EaEntry<'a> = EaEntryRaw<Cow<'a, [u8]>>;
+pub type EaEntryRaw<'a> = EaEntry<&'a [u8]>;
 
-impl<'a> EaEntry<'a> {
+impl<'a> EaEntryRaw<'a> {
     pub fn get_ea<T: Sized>(&self) -> &T {
         force_cast(&self.value)
     }
-
-    pub fn get_ea_raw(&self) -> &[u8] {
-        &self.value.as_ref()
-    }
-
-    pub fn get_ea_cow<T: Sized + Clone>(&'a self) -> Cow<'a, T> {
-        let t = self.get_ea();
-        match self.value {
-            Cow::Borrowed(_) => Cow::Borrowed(&t),
-            Cow::Owned(_) => Cow::Owned(t.clone()),
-        }
-    }
-
-    fn set_ea_raw(&mut self, value: Vec<u8>) {
-        self.value = Cow::Owned(value);
-    }
-
-    fn set_ea<T: Sized>(&mut self, value: &T) {
-        let data = slice_from_raw_parts(value as *const _ as *const u8, size_of_val(value));
-        let data = unsafe { &*data };
-        self.set_ea_raw(data.to_vec());
-    }
 }
+
+pub type EaEntryCow<'a> = EaEntry<Cow<'a, [u8]>>;
+
+pub type EaEntryOwned = EaEntry<[u8]>;
 
 /// 12, aligned size, could not be used
 #[allow(dead_code)] 
 const EA_BASE_SIZE_ALIGNED: usize = size_of::<FILE_FULL_EA_INFORMATION>();
-/// 9, use this
+/// 9, include NULL at end, use this
 const EA_BASE_SIZE_RAW: usize = size_of::<ULONG>() + size_of::<UCHAR>() + size_of::<UCHAR>() + size_of::<USHORT>() + size_of::<UCHAR>();
 const EA_ALIGN: usize = size_of::<ULONG>();
 
@@ -107,18 +50,27 @@ fn ea_entry_size(pea: &FILE_FULL_EA_INFORMATION) -> usize {
 
 fn ea_entry_size_inner(name_len: UCHAR, value_len: USHORT) -> usize {
     let data_len = EA_BASE_SIZE_RAW + name_len as usize + value_len as usize;
-    let full_len = (data_len + 1) / EA_ALIGN * EA_ALIGN;
+    let full_len = (data_len + EA_ALIGN - 1) / EA_ALIGN * EA_ALIGN;
     return full_len;
 }
 
-pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntryRaw<&[u8]>> {
+#[test]
+fn test_ea_entry_size_inner() {
+    assert_eq!(ea_entry_size_inner(1, 0), 12); // 10
+    assert_eq!(ea_entry_size_inner(1, 1), 12); // 11
+    assert_eq!(ea_entry_size_inner(1, 2), 12); // 12
+    assert_eq!(ea_entry_size_inner(2, 2), 16); // 13
+    assert_eq!(ea_entry_size_inner(2, 3), 16); // 14
+}
+
+pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntry<&[u8]>> {
     struct Iter<'a> {
         buf: &'a [u8],
         ea_ptr: *const u8,
     }
 
     impl<'a> Iterator for Iter<'a> {
-        type Item = EaEntryRaw<&'a [u8]>;
+        type Item = EaEntry<&'a [u8]>;
         
         fn next(&mut self) -> Option<Self::Item> {
             if self.ea_ptr == null() {
@@ -131,12 +83,13 @@ pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntryRaw<&[u8]>> {
 
                 // 11 is min actual size of EA that can be set with EaNameLength==1 and EaValueLength==1
                 // but read buf is 12 in length
-                assert!(ea_ptr.add(size_of::<FILE_FULL_EA_INFORMATION>()) < buf_range.end);
+                assert!(ea_ptr.add(size_of::<FILE_FULL_EA_INFORMATION>()) <= buf_range.end);
                 let pea: &FILE_FULL_EA_INFORMATION = transmute(ea_ptr);
                 let pea_end = ea_ptr.add(ea_entry_size(pea));
 
+                println!("ea_size: {}, buf_size: {}", ea_entry_size(pea), self.buf.len());
                 // invalid ea data may cause read overflow
-                assert!(pea_end < buf_range.end);
+                assert!(pea_end <= buf_range.end);
 
                 if pea.NextEntryOffset == 0 {
                     self.ea_ptr = null();
@@ -150,7 +103,7 @@ pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntryRaw<&[u8]>> {
                 let pvalue =  pname.add(pea.EaNameLength as usize + 1);
                 let value = &*slice_from_raw_parts(pvalue, pea.EaValueLength as usize);
 
-                return Some(EaEntryRaw {
+                return Some(EaEntry {
                     flags: pea.Flags,
                     name: name,
                     value: value,
@@ -165,15 +118,51 @@ pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntryRaw<&[u8]>> {
     }
 }
 
-pub fn parse_ea(buf: &[u8]) -> EaParsed {
-    let entries = parse_ea_to_iter(buf).map(|x| EaEntry {
+pub fn parse_ea<'a>(buf: &'a [u8]) -> Vec<EaEntry<&'a [u8]>> {
+    parse_ea_to_iter(buf).map(|x| EaEntry {
         flags: x.flags,
         name: x.name.into(),
         value: x.value.into(),
-    }).collect();
-    
-    EaParsed{
-        entries,
-        changed: false,
+    }).collect()
+}
+
+#[derive(Default)]
+pub struct EaOut {
+    pub buff: Vec<u8>,
+
+    // index, size
+    last_ea_info: Option<(usize, usize)>,
+}
+
+impl EaOut {
+    pub fn add<Bytes: AsRef<[u8]>>(&mut self, entry: &EaEntry<Bytes>) {
+        unsafe {
+            let this_size = entry.size();
+            self.buff.resize(self.buff.len() + entry.size(), 0);
+
+            let this_index = if let Some(last_ea_info) = self.last_ea_info {                
+                let last_ea_ptr = self.buff.as_mut_ptr().add(last_ea_info.0);
+                let last_ea: &mut FILE_FULL_EA_INFORMATION = transmute(last_ea_ptr);
+                last_ea.NextEntryOffset = last_ea_info.1 as u32;
+                last_ea_info.0 + last_ea_info.1
+            } else {
+                0
+            };
+
+            let pea: *mut u8 = self.buff.as_mut_ptr().add(this_index);
+            let ea: &mut FILE_FULL_EA_INFORMATION = transmute(pea);
+            ea.NextEntryOffset = 0;
+            ea.Flags = 0;
+
+            ea.EaNameLength = entry.name.as_ref().len() as u8;
+            let pname: *mut u8 = pea.add(offset_of!(FILE_FULL_EA_INFORMATION, EaName));
+            std::ptr::copy_nonoverlapping(entry.name.as_ref().as_ptr(), pname, ea.EaNameLength as usize);
+
+            ea.EaValueLength = entry.value.as_ref().len() as u16;
+            let pvalue: *mut u8 = pname.add(ea.EaNameLength as usize + 1);
+            std::ptr::copy_nonoverlapping(entry.value.as_ref().as_ptr(), pvalue, ea.EaValueLength as usize);
+
+            self.last_ea_info = Some((this_index, this_size));
+        }
     }
 }
