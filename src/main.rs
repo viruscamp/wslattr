@@ -59,7 +59,7 @@ fn main() {
 
             if let Some(ea_buffer) = &wsl_file.ea_buffer {
 
-                let mut ea_parsed = unsafe { ea_parse::parse_ea(ea_buffer) };
+                let mut ea_parsed = ea_parse::parse_ea(ea_buffer);
 
                 //let lxattrb = ea_parsed.set_ea(lxfs::LXATTRB, &lxfs::EaLxattrbV1::default());
     
@@ -153,7 +153,7 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
             // wsl UNC path like r"\\wsl$\Arch\file"
             println!("try load distro from wsl path: {:?}!", distro_name);
 
-            distro = distro::try_load_from_u16cstr(utfx::U16CString::from_os_str(&distro_name).unwrap());
+            distro = distro::try_load(&distro_name.to_str()?);
             let d = distro.as_ref().expect(&format!("invalid distro: {:?}", distro_name));
           
             let mut abs_path_comps = abs_path.components();

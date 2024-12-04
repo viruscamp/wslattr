@@ -1,8 +1,5 @@
 use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of, slice_from_raw_parts}};
 
-use ntapi::winapi::shared::minwindef::*;
-use winapi::shared::basetsd::ULONG64;
-
 use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
 use crate::ntfs_io::read_data;
 use crate::time_utils::TimeTWithNano; 
@@ -14,19 +11,19 @@ pub const LXXATTR: &'static str = "LXXATTR";
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct EaLxattrbV1 {
-    flags: USHORT,            // 0
-    version: USHORT,          // 1
+    flags: u16,            // 0
+    version: u16,          // 1
 
-    pub st_mode: ULONG,       // Mode bit mask constants: https://msdn.microsoft.com/en-us/library/3kyc8381.aspx
-    pub st_uid: ULONG,        // Numeric identifier of user who owns file (Linux-specific).
-    pub st_gid: ULONG,        // Numeric identifier of group that owns the file (Linux-specific)
-    pub st_rdev: ULONG,       // Drive number of the disk containing the file.
-    pub st_atime_nsec: ULONG, // Time of last access of file (nano-seconds).
-    pub st_mtime_nsec: ULONG, // Time of last modification of file (nano-seconds).
-    pub st_ctime_nsec: ULONG, // Time of creation of file (nano-seconds).
-    pub st_atime: ULONG64,    // Time of last access of file.
-    pub st_mtime: ULONG64,    // Time of last modification of file.
-    pub st_ctime: ULONG64,    // Time of creation of file.
+    pub st_mode: u32,       // Mode bit mask constants: https://msdn.microsoft.com/en-us/library/3kyc8381.aspx
+    pub st_uid: u32,        // Numeric identifier of user who owns file (Linux-specific).
+    pub st_gid: u32,        // Numeric identifier of group that owns the file (Linux-specific)
+    pub st_rdev: u32,       // Drive number of the disk containing the file.
+    pub st_atime_nsec: u32, // Time of last access of file (nano-seconds).
+    pub st_mtime_nsec: u32, // Time of last modification of file (nano-seconds).
+    pub st_ctime_nsec: u32, // Time of creation of file (nano-seconds).
+    pub st_atime: u64,    // Time of last access of file.
+    pub st_mtime: u64,    // Time of last modification of file.
+    pub st_ctime: u64,    // Time of creation of file.
 }
 
 impl Default for EaLxattrbV1 {
@@ -237,8 +234,8 @@ struct LxxattrEntryRaw {
 
 #[repr(C)]
 struct LxxattrRaw {
-    flags: USHORT,            // 0
-    version: USHORT,          // 1
+    flags: u16,            // 0
+    version: u16,          // 1
     entries: LxxattrEntryRaw,
 }
 
@@ -248,7 +245,7 @@ fn lxxattr_entry_size(pea: &LxxattrEntryRaw) -> usize {
     lxxattr_entry_size_inner(pea.name_length, pea.value_length)
 }
 
-fn lxxattr_entry_size_inner(name_len: UCHAR, value_len: USHORT) -> usize {
+fn lxxattr_entry_size_inner(name_len: u8, value_len: u16) -> usize {
     let data_len = offset_of!(LxxattrEntryRaw, name) + name_len as usize + value_len as usize;
     let full_len = (data_len + 1) / LXXATTR_ALIGN * LXXATTR_ALIGN;
     return full_len;

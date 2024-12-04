@@ -1,11 +1,10 @@
 use std::{borrow::Cow, mem::{offset_of, transmute}, ptr::{null, slice_from_raw_parts}};
 
-use ntapi::ntioapi::FILE_FULL_EA_INFORMATION;
-use winapi::shared::ntdef::*;
+use windows::Wdk::Storage::FileSystem::FILE_FULL_EA_INFORMATION;
 
 pub struct EaEntry<Bytes: AsRef<[u8]>> {
     #[allow(dead_code)]
-    pub flags: UCHAR,
+    pub flags: u8,
     /// should be ASCII only, add or delete
     pub name: Bytes,
     /// may be changed
@@ -40,15 +39,15 @@ pub type EaEntryOwned = EaEntry<[u8]>;
 #[allow(dead_code)] 
 const EA_BASE_SIZE_ALIGNED: usize = size_of::<FILE_FULL_EA_INFORMATION>();
 /// 9, include NULL at end, use this
-const EA_BASE_SIZE_RAW: usize = size_of::<ULONG>() + size_of::<UCHAR>() + size_of::<UCHAR>() + size_of::<USHORT>() + size_of::<UCHAR>();
-const EA_ALIGN: usize = size_of::<ULONG>();
+const EA_BASE_SIZE_RAW: usize = size_of::<u32>() + size_of::<u8>() + size_of::<u8>() + size_of::<u16>() + size_of::<u8>();
+const EA_ALIGN: usize = size_of::<u32>();
 
 // aligned with 4, min data size is 11, min size is 12
 fn ea_entry_size(pea: &FILE_FULL_EA_INFORMATION) -> usize {
     ea_entry_size_inner(pea.EaNameLength, pea.EaValueLength)
 }
 
-fn ea_entry_size_inner(name_len: UCHAR, value_len: USHORT) -> usize {
+fn ea_entry_size_inner(name_len: u8, value_len: u16) -> usize {
     let data_len = EA_BASE_SIZE_RAW + name_len as usize + value_len as usize;
     let full_len = (data_len + EA_ALIGN - 1) / EA_ALIGN * EA_ALIGN;
     return full_len;
@@ -87,7 +86,7 @@ pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntry<&[u8]>> {
                 let pea: &FILE_FULL_EA_INFORMATION = transmute(ea_ptr);
                 let pea_end = ea_ptr.add(ea_entry_size(pea));
 
-                println!("ea_size: {}, buf_size: {}", ea_entry_size(pea), self.buf.len());
+                //println!("ea_size: {}, buf_size: {}", ea_entry_size(pea), self.buf.len());
                 // invalid ea data may cause read overflow
                 assert!(pea_end <= buf_range.end);
 

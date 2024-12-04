@@ -1,9 +1,8 @@
 use std::path::PathBuf;
-
-use registry::{Data, Hive, RegKey, Security};
+use std::str::FromStr;
 
 use clap::ValueEnum;
-use utfx::{U16CStr, U16CString};
+use windows_registry::{Key, CURRENT_USER};
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
 pub enum FsType {
@@ -21,25 +20,18 @@ pub struct Distro {
 const REG_LXSS: &'static str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss";
 
 pub fn default() -> Option<Distro> {
-    let lxss = Hive::CurrentUser.open(REG_LXSS, Security::Read).ok()?;
-    if let Data::String(s) = lxss.value("DefaultDistribution").ok()? {
-        try_load_from_reg_key(lxss.open(s, Security::Read).ok()?)
-    } else {
-        None
-    }    
+    let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
+    let default_distro_guid = lxss.get_string("DefaultDistribution").ok()?;
+    return try_load_from_reg_key(lxss.open(default_distro_guid).ok()?); 
 }
 
 pub fn try_load<S: AsRef<str>>(name: S) -> Option<Distro> {
-    try_load_from_u16cstr(U16CString::from_str(name.as_ref()).expect("invalid u16 string for distro name"))
-}
-
-pub fn try_load_from_u16cstr<S: AsRef<U16CStr>>(name: S) -> Option<Distro> {
-    Hive::CurrentUser.open(REG_LXSS, Security::Read).ok()?.keys()
-    .filter_map(|k| k.ok())
-    .filter_map(|k| k.open(Security::Read).ok())
+    let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
+    lxss.keys().ok()?
+    .filter_map(|k| lxss.open(k).ok())
     .filter(|k| {
-        if let Ok(Data::String(s)) = k.value("DistributionName") {
-            s.as_ucstr() == name.as_ref()
+        if let Ok(s) = k.get_string("DistributionName") {
+            s.as_str() == name.as_ref()
         } else {
             false
         }
@@ -48,29 +40,22 @@ pub fn try_load_from_u16cstr<S: AsRef<U16CStr>>(name: S) -> Option<Distro> {
     .and_then(try_load_from_reg_key)
 }
 
-pub fn try_load_from_reg_key(distro_key: RegKey) -> Option<Distro> {
-    let name = if let Ok(Data::String(s)) = distro_key.value("DistributionName") {
-        Some(s.to_string_lossy())
-    } else {
-        None
-    }?;
-    let base_path = if let Ok(Data::String(s)) = distro_key.value("BasePath") {
-        Some(s.to_os_string().into())
-    } else {
-        None
-    }?;
+pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
+    let name: String = distro_key.get_string("DistributionName").ok()?;
+    let base_path: String = distro_key.get_string("BasePath").ok()?;
+    let base_path = PathBuf::from_str(&base_path).ok()?;
 
     // & 0x08 = 0 -> WSL1
-    let is_wsl2 = if let Ok(Data::U32(flags)) = distro_key.value("Flags") {
+    let is_wsl2 = if let Ok(flags) = distro_key.get_u32("Flags") {
         (flags & 0x08) != 0
     } else {
         false
     };
 
     let fs_type = if !is_wsl2 {
-        match distro_key.value("Version") {
-            Ok(Data::U32(1)) => Some(FsType::Lxfs),
-            Ok(Data::U32(2)) => Some(FsType::Wslfs),
+        match distro_key.get_u32("Version") {
+            Ok(1) => Some(FsType::Lxfs),
+            Ok(2) => Some(FsType::Wslfs),
             _ => None,
         }
     } else {

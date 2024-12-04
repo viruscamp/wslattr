@@ -3,8 +3,7 @@ use std::fmt::Display;
 use std::mem::{offset_of, transmute};
 use std::io::Result;
 
-use winapi::shared::minwindef::{DWORD, UCHAR, ULONG, USHORT};
-use winapi::shared::ntdef::HANDLE;
+use windows::Win32::Foundation::HANDLE;
 
 use crate::ea_parse::{EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
@@ -167,8 +166,8 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Lxdev {
-    pub major: ULONG,
-    pub minor: ULONG,
+    pub major: u32,
+    pub minor: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -193,7 +192,7 @@ impl WslfsReparseTag {
         }
     }
 
-    pub fn tag_id(&self) -> DWORD {
+    pub fn tag_id(&self) -> u32 {
         match self {
             WslfsReparseTag::LxSymlink(_) => IO_REPARSE_TAG_LX_SYMLINK,
             WslfsReparseTag::LxFifo => IO_REPARSE_TAG_LX_FIFO,
@@ -215,13 +214,13 @@ impl Display for WslfsReparseTag {
     }
 }
 
-pub const IO_REPARSE_TAG_LX_SYMLINK: DWORD = 0xA000001D;
-pub const IO_REPARSE_TAG_AF_UNIX: DWORD = 0x80000023;
-pub const IO_REPARSE_TAG_LX_FIFO: DWORD = 0x80000024;
-pub const IO_REPARSE_TAG_LX_CHR: DWORD = 0x80000025;
-pub const IO_REPARSE_TAG_LX_BLK: DWORD = 0x80000026;
+pub const IO_REPARSE_TAG_LX_SYMLINK: u32 = 0xA000001D;
+pub const IO_REPARSE_TAG_AF_UNIX: u32 = 0x80000023;
+pub const IO_REPARSE_TAG_LX_FIFO: u32 = 0x80000024;
+pub const IO_REPARSE_TAG_LX_CHR: u32 = 0x80000025;
+pub const IO_REPARSE_TAG_LX_BLK: u32 = 0x80000026;
 
-pub fn parse_reparse_tag(reparse_tag: DWORD, file_handle: HANDLE) -> Result<WslfsReparseTag> {
+pub fn parse_reparse_tag(reparse_tag: u32, file_handle: HANDLE) -> Result<WslfsReparseTag> {
     Ok(match reparse_tag {
         IO_REPARSE_TAG_LX_SYMLINK => {
             WslfsReparseTag::LxSymlink(unsafe { read_lx_symlink(file_handle) }?)
@@ -234,16 +233,16 @@ pub fn parse_reparse_tag(reparse_tag: DWORD, file_handle: HANDLE) -> Result<Wslf
     })
 }
 
-const LX_SYMLINK_SIG: ULONG = 0x00000002;
+const LX_SYMLINK_SIG: u32 = 0x00000002;
 
 #[derive(Debug, Default)]
 #[repr(C)]
 struct ReparseDataBufferLxSymlink {
-    reparse_tag: ULONG,
-    reparse_data_length: USHORT,
-    reserved: USHORT,
-    lx_symlink_sig: ULONG,
-    link: [UCHAR; 1],
+    reparse_tag: u32,
+    reparse_data_length: u16,
+    reserved: u16,
+    lx_symlink_sig: u32,
+    link: [u8; 1],
 }
 
 unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
@@ -303,7 +302,7 @@ pub unsafe fn set_wslfs_reparse_point(wsl_file: &mut WslFile, tag: WslfsReparseT
 
     let mut buf = match &tag {
         WslfsReparseTag::LxSymlink(s) => {
-            let data_len = s.bytes().len() + size_of::<ULONG>();
+            let data_len = s.bytes().len() + size_of::<u32>();
             let buf_len = offset_of!(ReparseDataBufferLxSymlink, lx_symlink_sig) + data_len;
             let mut buf = vec![0u8; buf_len];
             let reparse_data: &mut ReparseDataBufferLxSymlink = transmute(buf.as_mut_ptr());

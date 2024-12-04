@@ -6,9 +6,7 @@ use std::fmt::Display;
 use std::sync::LazyLock;
 
 use time::{format_description, Duration, OffsetDateTime};
-
-use winapi::shared::minwindef::FILETIME;
-use winapi::um::winnt::ULARGE_INTEGER;
+use windows::Win32::Foundation::FILETIME;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TimeTWithNano {
@@ -55,24 +53,38 @@ impl Into<FILETIME> for TimeTWithNano {
     }
 }
 
-pub fn timet64_to_filetime(tv_sec: u64, tv_nsec: u32) -> FILETIME {
-    let mut ull = ULARGE_INTEGER::default();
-    *unsafe { ull.QuadPart_mut() } = (tv_sec * 10000000u64) + 116444736000000000u64 + (tv_nsec as u64/100);
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct UlargeIntegerS {
+    low_part: u32,
+    high_part: u32,
+}
 
-    let s = unsafe { ull.s() };
+#[repr(C)]
+#[derive(Clone, Copy)]
+union ULARGE_INTEGER {
+    s: UlargeIntegerS,
+    u: UlargeIntegerS,
+    quad_part: u64,
+}
+
+pub fn timet64_to_filetime(tv_sec: u64, tv_nsec: u32) -> FILETIME {
+    let t64 = (tv_sec * 10000000u64) + 116444736000000000u64 + (tv_nsec as u64/100);
+    let mut ull = ULARGE_INTEGER { quad_part: t64 };
+    let s = unsafe { &mut ull.s };
     FILETIME {
-        dwLowDateTime: s.LowPart,
-        dwHighDateTime: s.HighPart,
+        dwLowDateTime: s.low_part,
+        dwHighDateTime: s.high_part,
     }
 }
 
 pub fn filetime_to_timet64(ft: FILETIME) -> (u64, u32) {
-    let mut ull = ULARGE_INTEGER::default();
-    let s = unsafe { ull.s_mut() };
-    s.LowPart = ft.dwLowDateTime;
-    s.HighPart = ft.dwHighDateTime;
+    let mut ull = ULARGE_INTEGER { quad_part: 0 };
+    let s = unsafe { &mut ull.s };
+    s.low_part = ft.dwLowDateTime;
+    s.high_part = ft.dwHighDateTime;
 
-    let qp = unsafe { ull.QuadPart() };
+    let qp = unsafe { ull.quad_part };
     let (sec, ns100) = ( qp / 10000000u64, qp % 10000000u64);
     return ((sec - 11644473600u64), (ns100 as u32) * 100u32);
 }
