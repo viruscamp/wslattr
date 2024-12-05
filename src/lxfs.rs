@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of, slice_from_raw_parts}};
 
-use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
+use crate::{ea_parse::{force_cast, EaEntry, EaEntryRaw}, posix::StModeType};
 use crate::ntfs_io::read_data;
 use crate::time_utils::TimeTWithNano; 
 use crate::wsl_file::{WslFile, WslFileAttributes};
@@ -112,13 +112,6 @@ const fn make_dev(ma: u32, mi: u32) -> u32 {
     (ma << MINORBITS) | mi
 }
 
-const S_IFLNK: u32 = 0o0120000;		/* symbolic link */
-
-/* symbolic link */
-const fn S_ISLNK(m: u32) -> bool {
-    (m & 0o0170000) == S_IFLNK
-}
-
 impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
     fn maybe(&self) -> bool {
         self.lxattrb.is_some() ||
@@ -134,7 +127,7 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
                 p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));
                 
                 if let Some(mode) = p.get_mode() {
-                    if S_ISLNK(mode) {
+                    if StModeType::from_mode(mode) == StModeType::LNK {
                         let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
                         let symlink = String::from_utf8(buf).unwrap();
                         p.symlink = Some(symlink);

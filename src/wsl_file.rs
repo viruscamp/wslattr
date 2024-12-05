@@ -47,16 +47,23 @@ pub struct WslFile {
     pub reparse_tag: Option<u32>,
 }
 
+unsafe fn close_file(wsl_file: &mut WslFile) {
+    if !wsl_file.file_handle.is_invalid() {
+        let nt_status = NtClose(wsl_file.file_handle);
+        if nt_status.is_err() {
+            println!("[ERROR] NtClose: {:#x}", nt_status.0);
+        }
+        wsl_file.file_handle = HANDLE::default();
+    }
+}
+
 impl<'a> Drop for WslFile {
     fn drop(&mut self) {
         unsafe {
             if !self.full_path.Buffer.is_null() {
                 RtlFreeUnicodeString(&mut self.full_path as *mut _);
             }
-            if !self.file_handle.is_invalid() {
-                NtClose(self.file_handle);
-                self.file_handle = HANDLE::default();
-            }
+            close_file(self);
         }
     }
 }
@@ -165,10 +172,7 @@ pub unsafe fn open_file_inner(wsl_file: &mut WslFile, writable: bool) -> Result<
 
 pub unsafe fn reopen_to_write(wsl_file: &mut WslFile) -> Result<()> {
     assert!(!wsl_file.writable);
-    if !wsl_file.file_handle.is_invalid() {
-        NtClose(wsl_file.file_handle);
-        wsl_file.file_handle = HANDLE::default();
-    }
+    close_file(wsl_file);
     open_file_inner(wsl_file, true)?;
     return Ok(());
 }

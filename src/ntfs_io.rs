@@ -99,7 +99,8 @@ pub unsafe fn read_reparse_point(file_handle: HANDLE) -> Result<Vec<u8>> {
             // retry with new buf
             let reparse_buf = buf.as_ptr() as *const REPARSE_GUID_DATA_BUFFER;
             // larger in most case
-            let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + (*reparse_buf).ReparseDataLength as usize;
+            let reparse_data_len = (*reparse_buf).ReparseDataLength as usize;
+            let buf_size = size_of::<REPARSE_GUID_DATA_BUFFER>() + reparse_data_len;
             let mut buf = vec![0; buf_size];
             match read_reparse_point_inner(file_handle, &mut buf) {
                 None => return Ok(buf),

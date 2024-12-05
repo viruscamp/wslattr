@@ -13,8 +13,8 @@ mod ntfs_io;
 mod ea_parse;
 mod lxfs;
 mod wslfs;
-mod vec_ex;
 mod time_utils;
+mod posix;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]

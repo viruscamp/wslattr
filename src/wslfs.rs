@@ -7,6 +7,7 @@ use windows::Win32::Foundation::HANDLE;
 
 use crate::ea_parse::{EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
+use crate::posix::StModeType;
 use crate::wsl_file::{open_file_inner, WslFile, WslFileAttributes};
 
 pub const LXUID: &'static str = "$LXUID";
@@ -29,7 +30,9 @@ pub struct WslfsParsed<'a> {
 
     pub lx_dot_ea: Vec<EaEntryCow<'a>>,
 
-    pub reparse_tag: Option<WslfsReparseTag>,
+    pub reparse_tag: Option<StModeType>,
+
+    pub symlink: Option<String>,
 }
 
 impl<'a> Display for WslfsParsed<'a> {
@@ -44,9 +47,9 @@ impl<'a> Display for WslfsParsed<'a> {
 
         match &self.reparse_tag {
             Some(t) => {
-                f.write_fmt(format_args!("{:28}{}\n", "File Type(Reparse Tag):", &t.type_name()))?;
-                if let WslfsReparseTag::LxSymlink(s) = t {
-                    f.write_fmt(format_args!("{:28}-> {}\n", "Symlink:", s))?;
+                f.write_fmt(format_args!("{:28}{}\n", "File Type(Reparse Tag):", &t.name()))?;
+                if *t == StModeType::LNK {
+                    f.write_fmt(format_args!("{:28}-> {}\n", "Symlink:", self.symlink.as_ref().map_or("", String::as_str)))?;
                 }
             },
             None => {},
@@ -89,11 +92,11 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
 
     fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) -> Result<Self> {
         let mut p = Self::default();
-        p.reparse_tag = if let Some(t) = wsl_file.reparse_tag {
-            Some(parse_reparse_tag(t, wsl_file.file_handle)?)
-        } else {
-            None
-        };
+
+        p.reparse_tag = wsl_file.reparse_tag.map(WslfsReparseTag::from_tag_id);
+        if wsl_file.reparse_tag == Some(IO_REPARSE_TAG_LX_SYMLINK) {
+            p.symlink = Some(read_lx_symlink(wsl_file.file_handle)?);
+        }
 
         p.lx_dot_ea = vec![];
 
@@ -170,46 +173,33 @@ pub struct Lxdev {
     pub minor: u32,
 }
 
-#[derive(Clone, Debug)]
-pub enum WslfsReparseTag {
-    LxSymlink(String),
-    LxFifo,
-    LxChr,
-    LxBlk,
-    AfUnix,
-
-    Unknown,
+trait WslfsReparseTag {
+    fn tag_id(&self) -> u32;
+    fn from_tag_id(tag_id: u32) -> Self;
 }
-impl WslfsReparseTag {
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            WslfsReparseTag::LxSymlink(_) => "SYMLINK",
-            WslfsReparseTag::LxFifo => "FIFO",
-            WslfsReparseTag::LxChr => "CHR",
-            WslfsReparseTag::LxBlk => "BLK",
-            WslfsReparseTag::AfUnix => "AF_UNIX",
-            WslfsReparseTag::Unknown => "UNKNOWN",
+
+impl WslfsReparseTag for StModeType {
+    fn tag_id(&self) -> u32 {
+        use StModeType::*;
+        match *self {
+            LNK => IO_REPARSE_TAG_LX_SYMLINK,
+            FIFO => IO_REPARSE_TAG_LX_FIFO,
+            CHR => IO_REPARSE_TAG_LX_CHR,
+            BLK => IO_REPARSE_TAG_LX_BLK,
+            SOCK => IO_REPARSE_TAG_AF_UNIX,
+            _ => 0,
         }
     }
 
-    pub fn tag_id(&self) -> u32 {
-        match self {
-            WslfsReparseTag::LxSymlink(_) => IO_REPARSE_TAG_LX_SYMLINK,
-            WslfsReparseTag::LxFifo => IO_REPARSE_TAG_LX_FIFO,
-            WslfsReparseTag::LxChr => IO_REPARSE_TAG_LX_CHR,
-            WslfsReparseTag::LxBlk => IO_REPARSE_TAG_LX_BLK,
-            WslfsReparseTag::AfUnix => IO_REPARSE_TAG_AF_UNIX,
-            WslfsReparseTag::Unknown => 0,
-        }
-    }
-}
-impl Display for WslfsReparseTag {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let type_name = self.type_name();
-        if let WslfsReparseTag::LxSymlink(s) = self {
-            f.write_fmt(format_args!("{type_name} -> {s}"))
-        } else {
-            f.write_str(type_name)
+    fn from_tag_id(tag_id: u32) -> Self {
+        use StModeType::*;
+        match tag_id {
+            IO_REPARSE_TAG_LX_SYMLINK => LNK,
+            IO_REPARSE_TAG_AF_UNIX => SOCK,
+            IO_REPARSE_TAG_LX_FIFO => FIFO,
+            IO_REPARSE_TAG_LX_CHR => CHR,
+            IO_REPARSE_TAG_LX_BLK => BLK,
+            _ => UNKNOWN,
         }
     }
 }
@@ -219,19 +209,6 @@ pub const IO_REPARSE_TAG_AF_UNIX: u32 = 0x80000023;
 pub const IO_REPARSE_TAG_LX_FIFO: u32 = 0x80000024;
 pub const IO_REPARSE_TAG_LX_CHR: u32 = 0x80000025;
 pub const IO_REPARSE_TAG_LX_BLK: u32 = 0x80000026;
-
-pub fn parse_reparse_tag(reparse_tag: u32, file_handle: HANDLE) -> Result<WslfsReparseTag> {
-    Ok(match reparse_tag {
-        IO_REPARSE_TAG_LX_SYMLINK => {
-            WslfsReparseTag::LxSymlink(unsafe { read_lx_symlink(file_handle) }?)
-        },
-        IO_REPARSE_TAG_AF_UNIX => WslfsReparseTag::AfUnix,
-        IO_REPARSE_TAG_LX_FIFO => WslfsReparseTag::LxFifo,
-        IO_REPARSE_TAG_LX_CHR => WslfsReparseTag::LxChr,
-        IO_REPARSE_TAG_LX_BLK => WslfsReparseTag::LxBlk,
-        _ => WslfsReparseTag::Unknown,
-    })
-}
 
 const LX_SYMLINK_SIG: u32 = 0x00000002;
 
@@ -245,8 +222,8 @@ struct ReparseDataBufferLxSymlink {
     link: [u8; 1],
 }
 
-unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
-    let raw_buf = crate::ntfs_io::read_reparse_point(file_handle)?;
+fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
+    let raw_buf = unsafe { crate::ntfs_io::read_reparse_point(file_handle)? };
 
     let data_idx = offset_of!(ReparseDataBufferLxSymlink, lx_symlink_sig);
     let link_idx = offset_of!(ReparseDataBufferLxSymlink, link);
@@ -260,7 +237,7 @@ unsafe fn read_lx_symlink(file_handle: HANDLE) -> Result<String> {
     //02 00 00 00 // Tag = 0x00000002
     //78          // link_name = 'x' UTF-8 no null
     
-    let reparse_buf: &ReparseDataBufferLxSymlink = transmute(raw_buf.as_ptr());
+    let reparse_buf: &ReparseDataBufferLxSymlink = unsafe { transmute(raw_buf.as_ptr()) };
 
     let data_len = reparse_buf.reparse_data_length as usize;
 
@@ -286,7 +263,7 @@ pub unsafe fn delete_wslfs_reparse_point(wsl_file: &mut WslFile) -> Result<()> {
 }
 
 // only for change wslfs file type
-pub unsafe fn set_wslfs_reparse_point(wsl_file: &mut WslFile, tag: WslfsReparseTag) -> Result<()> {
+pub unsafe fn set_wslfs_reparse_point(wsl_file: &mut WslFile, tag: StModeType, symlink: Option<&str>) -> Result<()> {
     assert!(wsl_file.writable);
 
     let reparse_tag_id = tag.tag_id();
@@ -301,7 +278,8 @@ pub unsafe fn set_wslfs_reparse_point(wsl_file: &mut WslFile, tag: WslfsReparseT
     }
 
     let mut buf = match &tag {
-        WslfsReparseTag::LxSymlink(s) => {
+        StModeType::LNK => {
+            let s = symlink.unwrap();
             let data_len = s.bytes().len() + size_of::<u32>();
             let buf_len = offset_of!(ReparseDataBufferLxSymlink, lx_symlink_sig) + data_len;
             let mut buf = vec![0u8; buf_len];
