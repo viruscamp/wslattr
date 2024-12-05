@@ -6,12 +6,12 @@ use std::ptr::null_mut;
 
 use windows::core::PWSTR;
 use windows::Wdk::Storage::FileSystem::{NtOpenFile, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT};
-use windows::Win32::Foundation::{HANDLE, STATUS_IO_REPARSE_TAG_NOT_HANDLED, STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING};
+use windows::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_IO_REPARSE_TAG_NOT_HANDLED, STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING};
 use windows::Win32::System::WindowsProgramming::RtlFreeUnicodeString;
 use windows::Win32::System::IO::IO_STATUS_BLOCK;
 use windows::Wdk::Foundation::{NtClose, OBJECT_ATTRIBUTES};
 
-use windows_sys::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_DEVICEMAP};
+use windows::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_DEVICEMAP};
 
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
@@ -37,7 +37,7 @@ pub trait WslFileAttributes<'a> : Sized {
 
 #[derive(Default)]
 pub struct WslFile {
-    full_path: UNICODE_STRING,
+    pub full_path: UNICODE_STRING,
 
     pub file_handle: HANDLE,
     pub writable: bool,
@@ -120,7 +120,7 @@ extern "system" {
         NtFileName: *mut UNICODE_STRING,
         FilePart: *mut PWSTR,
         RelativeName: *mut RTL_RELATIVE_NAME_U,
-    ) -> windows::Win32::Foundation::NTSTATUS;
+    ) -> NTSTATUS;
 }
 
 pub unsafe fn open_file_inner(wsl_file: &mut WslFile, writable: bool) -> Result<OpenFileType> {

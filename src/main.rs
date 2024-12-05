@@ -49,14 +49,13 @@ fn main() {
         if let Some(ea_buffer) = &wsl_file.ea_buffer {
             let ea_parsed = ea_parse::parse_ea(ea_buffer);
             print(&wsl_file, &ea_parsed);
-
-            //test_ea_write(&mut wsl_file);
         } else {
             println!("no EAs exist");
         }
 
         if args.command == Some(Command::Downgrade) {
 
+            //test_ea_write(&mut wsl_file);
             if let Some(ea_buffer) = &wsl_file.ea_buffer {
 
                 let mut ea_parsed = ea_parse::parse_ea(ea_buffer);
