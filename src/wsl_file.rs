@@ -52,7 +52,7 @@ impl<'a> Drop for WslFile {
             if !self.full_path.Buffer.is_null() {
                 RtlFreeUnicodeString(&mut self.full_path as *mut _);
             }
-            if self.file_handle.is_invalid() {
+            if !self.file_handle.is_invalid() {
                 NtClose(self.file_handle);
                 self.file_handle = HANDLE::default();
             }
