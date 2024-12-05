@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::io::{Error, Result};
 use std::mem::transmute;
 use std::os::windows::ffi::OsStrExt;
@@ -101,25 +102,12 @@ pub enum OpenFileType {
     ReparsePoint,
 }
 
-#[repr(C)]
-struct RTLP_CURDIR_REF {
-    ReferenceCount: u32,
-    DirectoryHandle: HANDLE,
-}
-
-#[repr(C)]
-struct RTL_RELATIVE_NAME_U {
-    RelativeName: UNICODE_STRING,
-    ContainingDirectory: HANDLE,
-    CurDirRef: *mut RTLP_CURDIR_REF,
-}
-
 extern "system" {
     fn RtlDosPathNameToNtPathName_U_WithStatus(
         DosFileName: PWSTR,
         NtFileName: *mut UNICODE_STRING,
         FilePart: *mut PWSTR,
-        RelativeName: *mut RTL_RELATIVE_NAME_U,
+        Reserved: *mut c_void,
     ) -> NTSTATUS;
 }
 
