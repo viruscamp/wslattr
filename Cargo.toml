@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = { version = "^4.5.22", features = ['derive'] }
+clap = { version = "^4.5.23", features = ['derive'] }
+regex = "^1.1.11"
 time = { version = "^0.3.37", features = ['formatting'] }
 windows-registry = "^0.3.0"
 

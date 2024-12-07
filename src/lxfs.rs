@@ -1,8 +1,8 @@
 use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of, slice_from_raw_parts}};
 
-use crate::{ea_parse::{force_cast, EaEntry, EaEntryRaw}, posix::StModeType};
+use crate::{ea_parse::{force_cast, EaEntry, EaEntryRaw}, posix::{lsperms, StModeType}};
 use crate::ntfs_io::read_data;
-use crate::time_utils::TimeTWithNano; 
+use crate::time_utils::LxfsTime; 
 use crate::wsl_file::{WslFile, WslFileAttributes};
 
 pub const LXATTRB: &'static str = "LXATTRB";
@@ -20,10 +20,10 @@ pub struct EaLxattrbV1 {
     pub st_rdev: u32,       // Drive number of the disk containing the file.
     pub st_atime_nsec: u32, // Time of last access of file (nano-seconds).
     pub st_mtime_nsec: u32, // Time of last modification of file (nano-seconds).
-    pub st_ctime_nsec: u32, // Time of creation of file (nano-seconds).
+    pub st_ctime_nsec: u32, // Time of change of file (nano-seconds).
     pub st_atime: u64,    // Time of last access of file.
     pub st_mtime: u64,    // Time of last modification of file.
-    pub st_ctime: u64,    // Time of creation of file.
+    pub st_ctime: u64,    // Time of change of file.
 }
 
 impl Default for EaLxattrbV1 {
@@ -58,13 +58,13 @@ impl<'a> Display for LxfsParsed<'a> {
         //LXATTRB:
         //  Flags:                   0
         //  Version:                 1
-        //  Ownership:               Uid: (0 / ), Gid: (0 / )
+        //  Ownership:               Uid: (0 / root), Gid: (0 / video)
         //  Mode:                    100755
-        //  Access:                  (0755) -rwxr-xr-x
+        //  Access:                  -rwxr-xr-x
         //  Device type:             37, 13
-        //  Last status change:      2019-11-19 18:29:52.102270300 +0800
         //  Last file access:        2019-11-19 18:29:52.000000000 +0800
         //  Last file modification:  2019-11-14 01:57:46.000000000 +0800
+        //  Last status change:      2019-11-19 18:29:52.102270300 +0800
         //Linux extended attributes(LXXATTR):
         //  user.xdg.origin.url:      http://example.url
         
@@ -76,15 +76,20 @@ impl<'a> Display for LxfsParsed<'a> {
             f.write_str("LXATTRB:\n")?;
             f.write_fmt(format_args!("{:28}{}\n", "  Flags:", l.flags))?;
             f.write_fmt(format_args!("{:28}{}\n", "  Version:", l.version))?;
-            f.write_fmt(format_args!("{:28}{} {}\n", "  Ownership:", l.st_uid, l.st_gid))?;
-            f.write_fmt(format_args!("{:28}{:o}\n", "  Mode:", l.st_mode))?;
-            f.write_fmt(format_args!("{:28}{:o}\n", "  Access:", l.st_mode))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  User:", l.st_uid))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Group:", l.st_gid))?;
+
+            let mode = l.st_mode;
+            f.write_fmt(format_args!("{:28}{:06o}\n", "  Mode:", mode))?;
+            let access = lsperms(mode);
+            f.write_fmt(format_args!("{:28}{}\n", "  Access:", access))?;
+
             if l.st_rdev != 0 {
                 f.write_fmt(format_args!("{:28}{}, {}\n", "  Device type:", dev_major(l.st_rdev), dev_minor(l.st_rdev)))?;
             }
-            f.write_fmt(format_args!("{:28}{}\n", "  Last status change:", TimeTWithNano::new(l.st_ctime, l.st_ctime_nsec)))?;
-            f.write_fmt(format_args!("{:28}{}\n", "  Last file access:", TimeTWithNano::new(l.st_atime, l.st_atime_nsec)))?;
-            f.write_fmt(format_args!("{:28}{}\n", "  Last file modification:", TimeTWithNano::new(l.st_mtime, l.st_mtime_nsec)))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Last file access:", LxfsTime::new(l.st_atime, l.st_atime_nsec)))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Last file modification:", LxfsTime::new(l.st_mtime, l.st_mtime_nsec)))?;
+            f.write_fmt(format_args!("{:28}{}\n", "  Last status change:", LxfsTime::new(l.st_ctime, l.st_ctime_nsec)))?;
         }
 
         if let Some(lxxattr) = &self.lxxattr {
@@ -108,7 +113,7 @@ const fn dev_major(dev: u32) -> u32 {
 const fn dev_minor(dev: u32) -> u32 {
     dev & MINORMASK
 }
-const fn make_dev(ma: u32, mi: u32) -> u32 {
+pub const fn make_dev(ma: u32, mi: u32) -> u32 {
     (ma << MINORBITS) | mi
 }
 
@@ -118,28 +123,30 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
         self.lxxattr.is_some()
     }
 
-    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) -> std::io::Result<Self> {
+    fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>)-> Self {
         let mut p = Self::default();
 
-        for EaEntry { name, value, flags: _ } in ea_parsed {
-            let name = name.as_ref();
-            if name == LXATTRB.as_bytes() {
-                p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));
-                
-                if let Some(mode) = p.get_mode() {
-                    if StModeType::from_mode(mode) == StModeType::LNK {
-                        let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
-                        let symlink = String::from_utf8(buf).unwrap();
-                        p.symlink = Some(symlink);
+        if let Some(ea_parsed) = ea_parsed {
+            for EaEntry { name, value, flags: _ } in ea_parsed {
+                let name = name.as_ref();
+                if name == LXATTRB.as_bytes() {
+                    p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));
+                    
+                    if let Some(mode) = p.get_mode() {
+                        if StModeType::from_mode(mode) == StModeType::LNK {
+                            let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
+                            let symlink = String::from_utf8(buf).unwrap();
+                            p.symlink = Some(symlink);
+                        }
                     }
+                } else if name == LXXATTR.as_bytes() {
+                    let lxxattr_parsed = unsafe { parse_lxxattr(value.as_ref()) };
+                    p.lxxattr = Some(lxxattr_parsed);
                 }
-            } else if name == LXXATTR.as_bytes() {
-                let lxxattr_parsed = unsafe { parse_lxxattr(value.as_ref()) };
-                p.lxxattr = Some(lxxattr_parsed);
             }
         }
 
-        Ok(p)
+        p
     }
     
     fn get_uid(&self) -> Option<u32> {

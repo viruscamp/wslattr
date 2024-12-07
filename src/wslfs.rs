@@ -7,7 +7,7 @@ use windows::Win32::Foundation::HANDLE;
 
 use crate::ea_parse::{EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
-use crate::posix::StModeType;
+use crate::posix::{lsperms, StModeType};
 use crate::wsl_file::{open_file_inner, WslFile, WslFileAttributes};
 
 pub const LXUID: &'static str = "$LXUID";
@@ -18,9 +18,6 @@ pub const LXDEV: &'static str = "$LXDEV";
 /// prefix of linux extended file attribute saved as ntfs ea
 pub const LX_DOT: &'static str = "LX.";
 
-// 从 EaParsed 借用会导致不能修改 EaParsed, 即使是只 push
-// EaParsed.push 可能扩容, 导致所有借用数据错误
-// 直接从 WslFile.ea_buf 借用才行
 #[derive(Default)]
 pub struct WslfsParsed<'a> {
     pub lxuid: Option<Cow<'a, u32>>,
@@ -47,7 +44,7 @@ impl<'a> Display for WslfsParsed<'a> {
 
         match &self.reparse_tag {
             Some(t) => {
-                f.write_fmt(format_args!("{:28}{}\n", "File Type(Reparse Tag):", &t.name()))?;
+                f.write_fmt(format_args!("{:28}{}\n", "File Type(Reparse Tag):", &t.name().0))?;
                 if *t == StModeType::LNK {
                     f.write_fmt(format_args!("{:28}-> {}\n", "Symlink:", self.symlink.as_ref().map_or("", String::as_str)))?;
                 }
@@ -62,7 +59,9 @@ impl<'a> Display for WslfsParsed<'a> {
             f.write_fmt(format_args!("{:28}{}\n", "$LXGID:", *l))?;
         }
         if let Some(l) = &self.lxmod {
-            f.write_fmt(format_args!("{:28}{:o}\n", "$LXMOD:", l.as_ref()))?;
+            let mode = *l.as_ref();
+            let access = lsperms(mode);
+            f.write_fmt(format_args!("{:28}Mode: {:06o} Access: {}\n", "$LXMOD:", mode, access))?;
         }
         if let Some(l) = &self.lxdev {
             f.write_fmt(format_args!("{:28}Device type: {}, {}\n", "$LXDEV:", l.major, l.minor))?;
@@ -90,35 +89,37 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
         !self.lx_dot_ea.is_empty()
     }
 
-    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) -> Result<Self> {
+    fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self {
         let mut p = Self::default();
 
         p.reparse_tag = wsl_file.reparse_tag.map(WslfsReparseTag::from_tag_id);
         if wsl_file.reparse_tag == Some(IO_REPARSE_TAG_LX_SYMLINK) {
-            p.symlink = Some(read_lx_symlink(wsl_file.file_handle)?);
+            p.symlink = read_lx_symlink(wsl_file.file_handle).ok();
         }
 
         p.lx_dot_ea = vec![];
 
-        for ea in ea_parsed {
-            if ea.name == LXUID.as_bytes() {
-                p.lxuid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-            } else if ea.name == LXGID.as_bytes() {
-                p.lxgid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-            } else if ea.name == LXMOD.as_bytes() {
-                p.lxmod = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-            } else if ea.name == LXDEV.as_bytes() {
-                p.lxdev = Some(Cow::Owned(ea.get_ea::<Lxdev>().to_owned()));
-            } else if ea.name.starts_with(LX_DOT.as_bytes()) {
-                p.lx_dot_ea.push(EaEntryCow {
-                    flags: ea.flags,
-                    name: ea.name.to_owned().into(),
-                    value: ea.value.to_owned().into(),
-                });
+        if let Some(ea_parsed) = ea_parsed {
+            for ea in ea_parsed {
+                if ea.name == LXUID.as_bytes() {
+                    p.lxuid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
+                } else if ea.name == LXGID.as_bytes() {
+                    p.lxgid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
+                } else if ea.name == LXMOD.as_bytes() {
+                    p.lxmod = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
+                } else if ea.name == LXDEV.as_bytes() {
+                    p.lxdev = Some(Cow::Owned(ea.get_ea::<Lxdev>().to_owned()));
+                } else if ea.name.starts_with(LX_DOT.as_bytes()) {
+                    p.lx_dot_ea.push(EaEntryCow {
+                        flags: ea.flags,
+                        name: ea.name.to_owned().into(),
+                        value: ea.value.to_owned().into(),
+                    });
+                }
             }
         }
 
-        Ok(p)
+        p
     }
 
     fn get_uid(&self) -> Option<u32> {
@@ -173,7 +174,7 @@ pub struct Lxdev {
     pub minor: u32,
 }
 
-trait WslfsReparseTag {
+pub trait WslfsReparseTag {
     fn tag_id(&self) -> u32;
     fn from_tag_id(tag_id: u32) -> Self;
 }

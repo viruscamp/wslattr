@@ -4,9 +4,9 @@ use std::io::{Error, Result};
 use std::ptr::addr_of;
 
 use windows::Win32::Foundation::{ERROR_MORE_DATA, HANDLE, MAX_PATH, WIN32_ERROR};
-use windows::Wdk::Storage::FileSystem::{FileEaInformation, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, FILE_EA_INFORMATION, REPARSE_DATA_BUFFER};
+use windows::Wdk::Storage::FileSystem::{FileBasicInformation, FileEaInformation, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, FILE_BASIC_INFORMATION, FILE_EA_INFORMATION, REPARSE_DATA_BUFFER};
 use windows::Win32::System::IO::{DeviceIoControl, IO_STATUS_BLOCK};
-use windows::Win32::Storage::FileSystem::{GetFileInformationByHandle, ReadFile, BY_HANDLE_FILE_INFORMATION, REPARSE_GUID_DATA_BUFFER};
+use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile, REPARSE_GUID_DATA_BUFFER};
 use windows::Win32::System::Ioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
 use windows::Win32::Foundation::GetLastError;
 
@@ -165,8 +165,7 @@ pub unsafe fn read_data(file_handle: HANDLE) -> Result<Vec<u8>> {
         file_handle,
         Some(buf.as_mut()),
         Some(&mut read_size),
-        None,
-        
+        None,        
     ) {
         println!("[ERROR] ReadFile: {}, Cannot read symlink from file content\n", &err);
         return Err(err.into());
@@ -176,14 +175,32 @@ pub unsafe fn read_data(file_handle: HANDLE) -> Result<Vec<u8>> {
 }
 
 pub unsafe fn write_data(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
-    todo!()
-}
-
-pub unsafe fn read_file_info(file_handle: HANDLE) -> Result<BY_HANDLE_FILE_INFORMATION> {
-    let mut file_info = BY_HANDLE_FILE_INFORMATION::default();
-    if let Err(err) = GetFileInformationByHandle(file_handle, &mut file_info as *mut _) {
-        println!("[ERROR] GetFileInformationByHandle");
+    let mut write_size: u32 = 0;
+    if let Err(err) = WriteFile(
+        file_handle,
+        Some(buf),
+        Some(&mut write_size),
+        None,        
+    ) {
+        println!("[ERROR] WriteFile: {}, Cannot write symlink from file content\n", &err);
         return Err(err.into());
     }
-    return Ok(file_info);
+    return Ok(());
+}
+
+pub fn query_file_basic_infomation(file_handle: HANDLE) -> Result<FILE_BASIC_INFORMATION> {
+    let mut isb = IO_STATUS_BLOCK::default();
+    let mut fbi = FILE_BASIC_INFORMATION::default();
+    let nt_status = unsafe { NtQueryInformationFile(
+        file_handle,
+        &mut isb,
+        transmute(&mut fbi),
+        size_of_val(&fbi) as u32,
+        FileBasicInformation,
+    ) };
+    if nt_status.is_err() {
+        println!("[ERROR] NtQueryInformationFile: {:#x}", nt_status.0);
+        return Err(Error::from_raw_os_error(nt_status.0));
+    }
+    Ok(fbi)
 }

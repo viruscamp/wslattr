@@ -1,10 +1,16 @@
-use std::{path::{self, Path, PathBuf}};
+use std::path::{absolute, Path, PathBuf};
 use clap::{arg, command, Parser, Subcommand};
 
-use ea_parse::{EaEntryRaw, EaOut};
+use ea_parse::{EaEntry, EaEntryRaw, EaOut};
+use lxfs::{EaLxattrbV1, LxfsParsed, LXATTRB};
+use ntfs_io::{delete_reparse_point, query_file_basic_infomation, write_data};
 use path_utils::*;
 use distro::Distro;
-use wsl_file::{reopen_to_write, WslFile, WslFileAttributes};
+use posix::{chmod, lsperms, StModeType};
+use time_utils::LxfsTime;
+use windows::Win32::Foundation::HANDLE;
+use wsl_file::{WslFile, WslFileAttributes};
+use wslfs::WslfsParsed;
 
 mod distro;
 mod path_utils;
@@ -36,8 +42,17 @@ struct Args {
 enum Command {
     Chown,
     Chgrp,
-    Chmod,
+    Chmod {
+        modes: String,
+    },
     Downgrade,
+    SetEa {
+        #[arg(long, short)]
+        name: String,
+    
+        #[arg(long, short)]
+        value: Option<String>,
+    },
 }
 
 /// inspect WSL1 lxfs or wslfs attributes from windows
@@ -46,56 +61,85 @@ fn main() {
     println!("args: {:?}!", args);
 
     if let Some(mut wsl_file) = load_wsl_file(&args.path, args.distro.as_ref()) {
-        if let Some(ea_buffer) = &wsl_file.ea_buffer {
-            let ea_parsed = ea_parse::parse_ea(ea_buffer);
-            print(&wsl_file, &ea_parsed);
-        } else {
+        let ea_buffer = wsl_file.read_ea().unwrap_or(None);
+
+        if ea_buffer.is_none() {
             println!("no EAs exist");
         }
+        
+        let ea_parsed = ea_buffer.as_ref()
+        .map(|ea_buffer| {
+            ea_parse::parse_ea(&ea_buffer)
+        });
 
-        if args.command == Some(Command::Downgrade) {
+        print_file_time(wsl_file.file_handle);
 
-            //test_ea_write(&mut wsl_file);
-            if let Some(ea_buffer) = &wsl_file.ea_buffer {
-
-                let mut ea_parsed = ea_parse::parse_ea(ea_buffer);
-
-                //let lxattrb = ea_parsed.set_ea(lxfs::LXATTRB, &lxfs::EaLxattrbV1::default());
+        let wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
+        println!("{wslfs}");
     
-                //let ea = ea_parsed.to_buf();
-                //unsafe { ntfs_io::write_ea(wsl_file.file_handle, &ea) };
+        let lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
+        println!("{lxfs}");
+
+        if let Some(cmd) = args.command {
+            match cmd {
+                Command::Chown => todo!(),
+                Command::Chgrp => todo!(),
+                Command::Chmod { modes } => {
+                    if let Some(mode) = wslfs.get_mode() {
+                        if let Ok(newmode) = chmod(mode, &modes) {
+                            println!("new mode: {:06o} , {}", newmode, lsperms(newmode));
+                        } else {
+                            println!("invalid modes: {}", modes);
+                        }
+                    }
+
+                    if let Some(mode) = lxfs.get_mode() {
+                        if let Ok(newmode) = chmod(mode, &modes) {
+                            println!("new mode: {:06o} , {}", newmode, lsperms(newmode));
+                        } else {
+                            println!("invalid modes: {}", modes);
+                        }
+                    }              
+                },
+                Command::Downgrade => {
+                    downgrade(&mut wsl_file, &wslfs, &lxfs);
+                },
+                Command::SetEa { name, value } => {
+                    //test_ea_write(&ea_buffer, &ea_parsed);
+                    set_ea(&mut wsl_file, &name, value.as_ref().map(String::as_str));
+                }
             }
         }
     }
 }
 
-fn test_ea_write(wsl_file: &mut WslFile) {
-    let ea_buffer = wsl_file.ea_buffer.as_ref().unwrap();
-    let ea_parsed = ea_parse::parse_ea(ea_buffer);
+fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u8]>>>) {
+    if let Some(ea_parsed) = ea_parsed {
+        let ea_buffer = ea_buffer.as_ref().unwrap();
 
-    let mut ea_out = EaOut::default();
-    for ea in ea_parsed {
-        ea_out.add(&ea);
+        let mut ea_out = EaOut::default();
+        for ea in ea_parsed {
+            ea_out.add(&ea);
+        }
+
+        // read ea and construct a new buffer, they should be same
+
+        println!("read_ea_len={} out_ea_len={}", ea_buffer.len(), ea_out.buff.len());
+        assert_eq!(ea_buffer, &ea_out.buff);
     }
+}
 
-    // read ea and construct a new buffer, they should be same
-
-    println!("read_ea_len={} out_ea_len={}", ea_buffer.len(), ea_out.buff.len());
-    assert_eq!(ea_buffer, &ea_out.buff);
-
+fn set_ea(wsl_file: &mut WslFile, name: &str, value: Option<&str>) {
     // add, change, delete
     let mut ea_out = EaOut::default();
     ea_out.add(&EaEntryRaw {
         flags: 0,
-        name: "TT".as_bytes(),
-        value: "".as_bytes(),
+        name: name.as_bytes(),
+        value: value.unwrap_or("").as_bytes(),
     });
     unsafe {
-        reopen_to_write(wsl_file);
-        for x in &ea_out.buff {
-            print!("{x:0>2x}, ");
-        }
-        ntfs_io::write_ea(wsl_file.file_handle, &ea_out.buff);
+        let _ = wsl_file.reopen_to_write();
+        let _ = ntfs_io::write_ea(wsl_file.file_handle, &ea_out.buff);
     }
 }
 
@@ -146,7 +190,7 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
 
         full_path = in_path.to_path_buf();
     } else {
-        let abs_path = path::absolute(in_path).expect(&format!("invalid path: {:?}", in_path));
+        let abs_path = absolute(in_path).expect(&format!("invalid path: {:?}", in_path));
         let path_prefix = try_get_abs_path_prefix(&abs_path);
         if let Some(distro_name) = path_prefix.as_ref().and_then(try_get_distro_from_unc_prefix) {
             // wsl UNC path like r"\\wsl$\Arch\file"
@@ -174,8 +218,8 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
         }
     }
 
-    println!("full_path: {:?}", &full_path);
-    println!("real_path: {:?}", &real_path);
+    println!("full_path: {}", &full_path.display());
+    println!("real_path: {}", &real_path.display());
     println!("distro: {:?}", distro);
 
     unsafe {
@@ -184,12 +228,88 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
     }
 }
 
-fn print<'a, 'b>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) {
-    if let Ok(wslfs) = wslfs::WslfsParsed::try_load(&wsl_file, &ea_parsed) {
-        println!("{wslfs}");
+fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
+    if lxfs.maybe() {
+        println!("{} maybe lxfs already", unsafe { wsl_file.full_path.Buffer.display() });
+        return;
+    }
+    let ea_to_remove = vec![wslfs::LXUID, wslfs::LXGID, wslfs::LXMOD, wslfs::LXDEV];
+    let mut ea_out = EaOut::default();
+
+    // 1. for all files, write LXATTRB
+    let mut lxattrb = EaLxattrbV1::default();
+
+    lxattrb.st_uid = wslfs.get_uid().unwrap_or(0);
+    lxattrb.st_gid = wslfs.get_gid().unwrap_or(0);
+    lxattrb.st_mode = wslfs.get_mode().unwrap_or(0);
+
+    let dev_major = wslfs.get_dev_major().unwrap_or(0);
+    let dev_minor = wslfs.get_dev_minor().unwrap_or(0);
+    lxattrb.st_rdev = lxfs::make_dev(dev_major, dev_minor);
+
+    if let Ok(fbi) = query_file_basic_infomation(wsl_file.file_handle) {
+        (lxattrb.st_atime, lxattrb.st_atime_nsec) = time_utils::u64_to_lxfs_time(fbi.LastAccessTime as u64).into();
+        (lxattrb.st_mtime, lxattrb.st_mtime_nsec) = time_utils::u64_to_lxfs_time(fbi.LastWriteTime as u64).into();
+        (lxattrb.st_ctime, lxattrb.st_ctime_nsec) = time_utils::u64_to_lxfs_time(fbi.ChangeTime as u64).into();
     }
 
-    if let Ok(lxfs) = lxfs::LxfsParsed::try_load(&wsl_file, &ea_parsed) {
-        println!("{lxfs}");
+    let lxattrb_bytes = unsafe {
+		std::slice::from_raw_parts(
+			&lxattrb as *const _ as *const u8,
+			std::mem::size_of_val(&lxattrb)
+		)
+	};
+    ea_out.add(&EaEntryRaw {
+        flags: 0,
+        name: LXATTRB.as_bytes(),
+        value: lxattrb_bytes,
+    });
+
+    // 2. for all files, write LXXATTR, from LX.*
+    // TODO
+
+    // write EA
+    for ea in ea_to_remove {
+        ea_out.add(&EaEntryRaw {
+            flags: 0,
+            name: ea.as_bytes(),
+            value: "".as_bytes(),
+        });
+    }
+    unsafe {
+        let _ = wsl_file.reopen_to_write();
+        let _ = ntfs_io::write_ea(wsl_file.file_handle, &ea_out.buff);
+    }
+
+    // 3. special files, remove sparse point
+    if let Some(t) = wslfs.reparse_tag {
+        if  t != StModeType::UNKNOWN {
+            use wslfs::WslfsReparseTag;
+            unsafe {
+                let _ = delete_reparse_point(wsl_file.file_handle, t.tag_id());
+            }
+        }
+    }
+
+    // 4. symlink files, write file content
+    if let Some(ref symlink) = wslfs.symlink {
+        unsafe {
+            let _ = write_data(wsl_file.file_handle, symlink.as_bytes());
+        }
+    }
+}
+
+fn print_file_time(file_handle: HANDLE) {
+    if let Ok(fbi) = query_file_basic_infomation(file_handle) {
+        let creation_time: LxfsTime = (fbi.CreationTime as u64).into();
+        println!("{:28}{}", "CreationTime:", creation_time);
+        let last_access_time: LxfsTime = (fbi.LastAccessTime as u64).into();
+        println!("{:28}{}", "LastAccessTime:", last_access_time);
+        let last_write_time: LxfsTime = (fbi.LastWriteTime as u64).into();
+        println!("{:28}{}", "LastWriteTime:", last_write_time);
+        let change_time: LxfsTime = (fbi.ChangeTime as u64).into();
+        println!("{:28}{}", "ChangeTime:", change_time);
+    } else {
+        println!("[ERROR] cannot query file times")
     }
 }

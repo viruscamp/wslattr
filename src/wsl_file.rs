@@ -17,9 +17,10 @@ use windows::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONAT
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
 use crate::ea_parse::EaEntryRaw;
+use crate::ntfs_io::read_ea_all;
 
 pub trait WslFileAttributes<'a> : Sized {
-    fn try_load<'b: 'a>(wsl_file: &'a WslFile, ea_parsed: &'b Vec<EaEntryRaw<'a>>) -> Result<Self>;
+    fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self;
 
     fn maybe(&self) -> bool;
 
@@ -43,17 +44,29 @@ pub struct WslFile {
     pub file_handle: HANDLE,
     pub writable: bool,
 
-    pub ea_buffer: Option<Vec<u8>>,
     pub reparse_tag: Option<u32>,
 }
 
-unsafe fn close_file(wsl_file: &mut WslFile) {
-    if !wsl_file.file_handle.is_invalid() {
-        let nt_status = NtClose(wsl_file.file_handle);
-        if nt_status.is_err() {
-            println!("[ERROR] NtClose: {:#x}", nt_status.0);
+impl WslFile {
+    pub fn close(&mut self) {
+        if !self.file_handle.is_invalid() {
+            let nt_status = unsafe { NtClose(self.file_handle) };
+            if nt_status.is_err() {
+                println!("[ERROR] NtClose: {:#x}", nt_status.0);
+            }
+            self.file_handle = HANDLE::default();
         }
-        wsl_file.file_handle = HANDLE::default();
+    }
+
+    pub fn reopen_to_write(&mut self) -> Result<()> {
+        assert!(!self.writable);
+        self.close();
+        unsafe { open_file_inner(self, true)? };
+        return Ok(());
+    }
+
+    pub fn read_ea(&self) -> Result<Option<Vec<u8>>> {
+        unsafe { read_ea_all(self.file_handle) }
     }
 }
 
@@ -63,7 +76,7 @@ impl<'a> Drop for WslFile {
             if !self.full_path.Buffer.is_null() {
                 RtlFreeUnicodeString(&mut self.full_path as *mut _);
             }
-            close_file(self);
+            self.close();
         }
     }
 }
@@ -99,7 +112,6 @@ pub unsafe fn open_handle(path: &Path, writable: bool) -> Result<WslFile> {
         wsl_file.reparse_tag = Some(file_attribute_tag_info.ReparseTag);
     }
 
-    wsl_file.ea_buffer = crate::ntfs_io::read_ea_all(wsl_file.file_handle)?;
     wsl_file.writable = writable;
     return Ok(wsl_file);
 }
@@ -168,11 +180,4 @@ pub unsafe fn open_file_inner(wsl_file: &mut WslFile, writable: bool) -> Result<
         }
     }
     return Ok(OpenFileType::Normal);
-}
-
-pub unsafe fn reopen_to_write(wsl_file: &mut WslFile) -> Result<()> {
-    assert!(!wsl_file.writable);
-    close_file(wsl_file);
-    open_file_inner(wsl_file, true)?;
-    return Ok(());
 }
