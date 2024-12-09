@@ -7,6 +7,7 @@ edition = "2021"
 clap = { version = "^4.5.23", features = ['derive'] }
 regex = "^1.1.11"
 time = { version = "^0.3.37", features = ['formatting'] }
+walkdir = "^2"
 windows-registry = "^0.3.0"
 
 [dependencies.windows]

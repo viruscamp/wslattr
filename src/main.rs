@@ -60,7 +60,9 @@ fn main() {
     let args = Args::parse();
     println!("args: {:?}!", args);
 
-    if let Some(mut wsl_file) = load_wsl_file(&args.path, args.distro.as_ref()) {
+    let distro = try_load_distro(args.distro.as_ref());
+
+    if let Some(mut wsl_file) = load_wsl_file(&args.path, &distro) {
         let ea_buffer = wsl_file.read_ea().unwrap_or(None);
 
         if ea_buffer.is_none() {
@@ -102,7 +104,11 @@ fn main() {
                     }              
                 },
                 Command::Downgrade => {
-                    downgrade(&mut wsl_file, &wslfs, &lxfs);
+                    if let Some(d) = &distro {
+                        downgrade_distro(d);
+                    } else {
+                        downgrade(&mut wsl_file, &wslfs, &lxfs);
+                    }
                 },
                 Command::SetEa { name, value } => {
                     //test_ea_write(&ea_buffer, &ea_parsed);
@@ -172,8 +178,7 @@ pub fn try_load_distro<S: AsRef<str>>(distro_from_arg: Option<S>) -> Option<Dist
     })
 }
 
-fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> Option<WslFile> {
-    let distro;
+fn load_wsl_file(in_path: &Path, distro_from_arg: &Option<Distro>) -> Option<WslFile> {
     let full_path;
     let real_path;
 
@@ -181,8 +186,8 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
         // unix path with root like r"/usr/bin"
         println!("unix path: {:?}", in_path);
 
-        distro = try_load_distro(distro_from_arg);
-        let d = distro.as_ref().expect("argument --distro is needed for unix path");
+        let d = distro_from_arg.as_ref().expect("argument --distro is needed for unix path");
+        println!("distro: {:?}", d);
 
         let mut unix_path_comps = in_path.components();
         unix_path_comps.next(); // RootDir
@@ -196,9 +201,10 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
             // wsl UNC path like r"\\wsl$\Arch\file"
             println!("try load distro from wsl path: {:?}!", distro_name);
 
-            distro = distro::try_load(&distro_name.to_str()?);
+            let distro = distro::try_load(&distro_name.to_str()?);
             let d = distro.as_ref().expect(&format!("invalid distro: {:?}", distro_name));
-          
+            println!("distro: {:?}", d);
+
             let mut abs_path_comps = abs_path.components();
             abs_path_comps.next(); // Prefix
             abs_path_comps.next(); // RootDir
@@ -209,8 +215,6 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
             // normal path like r"D:\file"
             real_path = abs_path.clone();
             full_path = abs_path;
-
-            distro = try_load_distro(distro_from_arg);
         } else {
             dbg!(path_prefix);
             // unsupported path like r"\\remote\share\"
@@ -220,12 +224,40 @@ fn load_wsl_file<S: AsRef<str>>(in_path: &Path, distro_from_arg: Option<S>) -> O
 
     println!("full_path: {}", &full_path.display());
     println!("real_path: {}", &real_path.display());
-    println!("distro: {:?}", distro);
 
     unsafe {
         let wsl_file = wsl_file::open_handle(&real_path, false).expect("failed to open file");
         return Some(wsl_file);
     }
+}
+
+fn downgrade_distro(distro: &Distro) {
+    for entry in walkdir::WalkDir::new(&distro.base_path) {
+        if let Ok(entry) = entry {
+            if let Ok(_) = downgrade_path(&entry.path().join("rootfs")) {
+                println!("downgrade success: {}", entry.path().display());
+            } else {
+                println!("downgrade failed: {}", entry.path().display());
+            }
+        }
+    }
+}
+
+fn downgrade_path(real_path: &Path) -> std::io::Result<()> {
+    let mut wsl_file = unsafe { wsl_file::open_handle(&real_path, false)? };
+    let ea_buffer = wsl_file.read_ea().unwrap_or(None);
+    
+    let ea_parsed = ea_buffer.as_ref()
+    .map(|ea_buffer| {
+        ea_parse::parse_ea(&ea_buffer)
+    });
+
+    let wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
+    let lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
+
+    downgrade(&mut wsl_file, &wslfs, &lxfs);
+
+    Ok(())
 }
 
 fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
