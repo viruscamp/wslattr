@@ -4,6 +4,8 @@ use std::str::FromStr;
 use clap::ValueEnum;
 use windows_registry::{Key, CURRENT_USER};
 
+use crate::posix::{load_groups, load_users, Group, User};
+
 #[derive(Clone, Copy, ValueEnum, Debug)]
 pub enum FsType {
     Lxfs,
@@ -15,6 +17,9 @@ pub struct Distro {
     pub name: String,
     pub base_path: PathBuf,
     pub fs_type: Option<FsType>, // None means WSL2
+
+    pub users: Option<Vec<User>>,
+    pub groups: Option<Vec<Group>>,
 }
 
 const REG_LXSS: &'static str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss";
@@ -62,9 +67,48 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
         None
     };
 
+    let groups = load_groups(&base_path.join("rootfs"));
+    let users = load_users(&base_path.join("rootfs"));
+
     return Some(Distro {
         name,
         base_path,
         fs_type,
+        users,
+        groups,
     });
+}
+
+impl Distro {
+    pub fn uid(&self, user_name: &str) -> Option<u32> {
+        self.users.as_ref()
+        .and_then(|users|
+            users.iter()
+            .find(|u| u.name == user_name).and_then(|u| Some(u.uid))
+        )
+    }
+
+    pub fn gid(&self, group_name: &str) -> Option<u32> {
+        self.groups.as_ref()
+        .and_then(|groups|
+            groups.iter()
+            .find(|u| u.name == group_name).and_then(|u| Some(u.gid))
+        )
+    }
+
+    pub fn user_name(&self, uid: u32) -> Option<&str> {
+        self.users.as_ref()
+        .and_then(|users|
+            users.iter()
+            .find(|u| u.uid == uid).and_then(|u| Some(u.name.as_str()))
+        )
+    }
+
+    pub fn group_name(&self, gid: u32) -> Option<&str> {
+        self.groups.as_ref()
+        .and_then(|groups|
+            groups.iter()
+            .find(|u| u.gid == gid).and_then(|u| Some(u.name.as_str()))
+        )
+    }
 }

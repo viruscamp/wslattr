@@ -1,3 +1,5 @@
+use std::{fs::File, io::{BufRead, BufReader}, path::{Path, PathBuf}};
+
 
 pub const ST_MODE_TYPE_FIFO: u32 = 0o_0010000;
 pub const ST_MODE_TYPE_CHR:  u32 = 0o_0020000;
@@ -182,4 +184,52 @@ pub fn chmod_bit(mut mode: u32, who: char, act: char, what: char) -> u32 {
         mode &= !mask;
     }
     return mode;
+}
+
+fn line_parse(line: &str) -> Result<(String, u32), ()> {
+    let mut tokens = line.split(':').fuse();
+    let name = tokens.next().ok_or(())?;
+    tokens.next();
+    let uid: u32 = tokens.next().ok_or(())?.parse().map_err(|_e| { () })?;
+    Ok((name.to_string(), uid))
+}
+
+// name:x:uid:gid
+#[derive(Debug)]
+pub struct User {
+    pub name: String,
+    pub uid: u32,
+}
+
+pub fn load_users(distro_root: &Path) -> Option<Vec<User>> {
+    let file = File::open(distro_root.join("etc/passwd")).ok()?;
+    let reader = BufReader::new(file);
+
+    let users = reader.lines()
+    .filter_map(|l| l.ok())
+    .filter_map(|l| line_parse(&l).ok())
+    .map(|(name, uid)| User { name, uid } )
+    .collect();
+
+    Some(users)
+}
+
+// name:x:gid
+#[derive(Debug)]
+pub struct Group {
+    pub name: String,
+    pub gid: u32,
+}
+
+pub fn load_groups(distro_root: &Path) -> Option<Vec<Group>> {
+    let file = File::open(distro_root.join("etc/group")).ok()?;
+    let reader = BufReader::new(file);
+
+    let groups = reader.lines()
+    .filter_map(|l| l.ok())
+    .filter_map(|l| line_parse(&l).ok())
+    .map(|(name, gid)| Group { name, gid } )
+    .collect();
+
+    Some(groups)
 }

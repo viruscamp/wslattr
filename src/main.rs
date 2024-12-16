@@ -76,10 +76,12 @@ fn main() {
 
         print_file_time(wsl_file.file_handle);
 
-        let wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
+        let mut wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
+        wslfs.distro = distro.as_ref();
         println!("{wslfs}");
     
-        let lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
+        let mut lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
+        lxfs.distro = distro.as_ref();
         println!("{lxfs}");
 
         if let Some(cmd) = args.command {
@@ -187,7 +189,7 @@ fn load_wsl_file(in_path: &Path, distro_from_arg: &Option<Distro>) -> Option<Wsl
         println!("unix path: {:?}", in_path);
 
         let d = distro_from_arg.as_ref().expect("argument --distro is needed for unix path");
-        println!("distro: {:?}", d);
+        //println!("distro: {:?}", d);
 
         let mut unix_path_comps = in_path.components();
         unix_path_comps.next(); // RootDir
@@ -203,7 +205,7 @@ fn load_wsl_file(in_path: &Path, distro_from_arg: &Option<Distro>) -> Option<Wsl
 
             let distro = distro::try_load(&distro_name.to_str()?);
             let d = distro.as_ref().expect(&format!("invalid distro: {:?}", distro_name));
-            println!("distro: {:?}", d);
+            //println!("distro: {:?}", d);
 
             let mut abs_path_comps = abs_path.components();
             abs_path_comps.next(); // Prefix

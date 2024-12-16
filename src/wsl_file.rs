@@ -17,7 +17,7 @@ use windows::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONAT
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
 use crate::ea_parse::EaEntryRaw;
-use crate::ntfs_io::read_ea_all;
+use crate::ntfs_io::{error_msg_ntdll, read_ea_all};
 
 pub trait WslFileAttributes<'a> : Sized {
     fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self;
@@ -171,11 +171,13 @@ pub unsafe fn open_file_inner(wsl_file: &mut WslFile, writable: bool) -> Result<
             );
             if nt_status.is_err() {
                 println!("[ERROR] NtOpenFile: {:#x} , open as REPARSE_POINT", nt_status.0);
+                //println!("{}", error_msg_ntdll(nt_status.0 as u32).unwrap());
                 return Err(Error::from_raw_os_error(nt_status.0));
             }
             return Ok(OpenFileType::ReparsePoint);
         } else {
             println!("[ERROR] NtOpenFile: {:#x}", nt_status.0);
+            //println!("{}", error_msg_ntdll(nt_status.0 as u32).unwrap());
             return Err(Error::from_raw_os_error(nt_status.0));
         }
     }

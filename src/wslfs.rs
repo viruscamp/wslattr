@@ -5,6 +5,7 @@ use std::io::Result;
 
 use windows::Win32::Foundation::HANDLE;
 
+use crate::distro::Distro;
 use crate::ea_parse::{EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
 use crate::posix::{lsperms, StModeType};
@@ -19,7 +20,7 @@ pub const LXDEV: &'static str = "$LXDEV";
 pub const LX_DOT: &'static str = "LX.";
 
 #[derive(Default)]
-pub struct WslfsParsed<'a> {
+pub struct WslfsParsed<'a, 'd> {
     pub lxuid: Option<Cow<'a, u32>>,
     pub lxgid: Option<Cow<'a, u32>>,
     pub lxmod: Option<Cow<'a, u32>>,
@@ -30,13 +31,15 @@ pub struct WslfsParsed<'a> {
     pub reparse_tag: Option<StModeType>,
 
     pub symlink: Option<String>,
+
+    pub distro: Option<&'d Distro>,
 }
 
-impl<'a> Display for WslfsParsed<'a> {
+impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         //Symlink:                   -> target
-        //$LXUID:                    Uid: (0 / )
-        //$LXGID:                    Gid: (0 / )
+        //$LXUID:                    Uid: 0 / user1
+        //$LXGID:                    Gid: 0
         //$LXMOD:                    Mode: 100755 Access: (0755) -rwxr-xr-x
         //$LXDEV:                    Device type: 37,13
         //Linux extended attributes(LX.*):
@@ -53,10 +56,20 @@ impl<'a> Display for WslfsParsed<'a> {
         };
 
         if let Some(l) = &self.lxuid {
-            f.write_fmt(format_args!("{:28}{}\n", "$LXUID:", *l))?;
+            let uid: u32 = **l;
+            if let Some(user_name) = self.distro.and_then(|d| d.user_name(uid)) {
+                f.write_fmt(format_args!("{:28}Uid: {} / {}\n", "$LXUID:", uid, user_name))?;
+            } else {
+                f.write_fmt(format_args!("{:28}Uid: {}\n", "$LXUID:", uid))?;
+            }
         }
         if let Some(l) = &self.lxgid {
-            f.write_fmt(format_args!("{:28}{}\n", "$LXGID:", *l))?;
+            let gid: u32 = **l;
+            if let Some(group_name) = self.distro.and_then(|d| d.group_name(gid)) {
+                f.write_fmt(format_args!("{:28}Gid: {} / {}\n", "$LXGID:", gid, group_name))?;
+            } else {
+                f.write_fmt(format_args!("{:28}Gid: {}\n", "$LXGID:", gid))?;
+            }
         }
         if let Some(l) = &self.lxmod {
             let mode = *l.as_ref();
@@ -79,7 +92,7 @@ impl<'a> Display for WslfsParsed<'a> {
     }
 }
 
-impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
+impl<'a, 'd> WslFileAttributes<'a> for WslfsParsed<'a, 'd> {
     fn maybe(&self) -> bool {
         self.lxuid.is_some() ||
         self.lxgid.is_some() ||

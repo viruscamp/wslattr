@@ -1,9 +1,10 @@
 use std::ffi::c_void;
 use std::mem::{offset_of, transmute};
 use std::io::{Error, Result};
-use std::ptr::addr_of;
+use std::ptr::{addr_of, null_mut};
 
-use windows::Win32::Foundation::{ERROR_MORE_DATA, HANDLE, MAX_PATH, WIN32_ERROR};
+use windows::core::{PCSTR, PWSTR};
+use windows::Win32::Foundation::{LocalFree, ERROR_MORE_DATA, HANDLE, HLOCAL, MAX_PATH, WIN32_ERROR};
 use windows::Wdk::Storage::FileSystem::{FileBasicInformation, FileEaInformation, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, FILE_BASIC_INFORMATION, FILE_EA_INFORMATION, REPARSE_DATA_BUFFER};
 use windows::Win32::System::IO::{DeviceIoControl, IO_STATUS_BLOCK};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile, REPARSE_GUID_DATA_BUFFER};
@@ -203,4 +204,48 @@ pub fn query_file_basic_infomation(file_handle: HANDLE) -> Result<FILE_BASIC_INF
         return Err(Error::from_raw_os_error(nt_status.0));
     }
     Ok(fbi)
+}
+
+pub fn error_msg_ntdll(msgid: u32) -> windows::core::Result<String> {
+    use windows::Win32::System::Diagnostics::Debug::*;
+    use windows::core::Error;
+    use windows::Win32::System::LibraryLoader::LoadLibraryA;
+
+    use std::sync::LazyLock;
+
+    struct ModuelWrapper(*const c_void);
+    unsafe impl Sync for ModuelWrapper {}
+    unsafe impl Send for ModuelWrapper {}
+
+    static NTDLL: LazyLock<ModuelWrapper> = LazyLock::new(|| unsafe {
+        ModuelWrapper(LoadLibraryA(PCSTR(c"ntdll.dll".as_ptr() as *const u8)).unwrap().0)
+    });
+
+    unsafe {
+        let mut lp_allocated_buffer = PWSTR(null_mut());
+
+        let size = FormatMessageW(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS,
+            Some(NTDLL.0),
+            msgid,
+            0,
+            PWSTR(&mut lp_allocated_buffer as *mut PWSTR as _),
+            0,
+            None,
+        );
+
+        if size > 0 {
+            let message_string_result = lp_allocated_buffer.to_string();
+            let hresult = LocalFree(HLOCAL(lp_allocated_buffer.as_ptr() as _));
+            if hresult.0 == 0 as _ {
+                return Ok(message_string_result?);
+            } else {
+                return Err(Error::from_win32());
+            }
+        } else {
+            let format_message_err = GetLastError();
+            eprintln!("{:?}", format_message_err);
+            return Err(Error::from_win32());
+        }
+    }
 }

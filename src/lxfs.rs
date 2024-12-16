@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of, slice_from_raw_parts}};
 
-use crate::{ea_parse::{force_cast, EaEntry, EaEntryRaw}, posix::{lsperms, StModeType}};
+use crate::{distro::Distro, ea_parse::{force_cast, EaEntry, EaEntryRaw}, posix::{lsperms, StModeType}};
 use crate::ntfs_io::read_data;
 use crate::time_utils::LxfsTime; 
 use crate::wsl_file::{WslFile, WslFileAttributes};
@@ -46,13 +46,15 @@ impl Default for EaLxattrbV1 {
 }
 
 #[derive(Default)]
-pub struct LxfsParsed<'a> {
+pub struct LxfsParsed<'a, 'd> {
     lxattrb: Option<Cow<'a, EaLxattrbV1>>,
     lxxattr: Option<LxxattrParsed<'a>>,
     symlink: Option<String>,
+
+    pub distro: Option<&'d Distro>,
 }
 
-impl<'a> Display for LxfsParsed<'a> {
+impl<'a, 'd> Display for LxfsParsed<'a, 'd> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         //Symlink:                   -> target
         //LXATTRB:
@@ -76,13 +78,24 @@ impl<'a> Display for LxfsParsed<'a> {
             f.write_str("LXATTRB:\n")?;
             f.write_fmt(format_args!("{:28}{}\n", "  Flags:", l.flags))?;
             f.write_fmt(format_args!("{:28}{}\n", "  Version:", l.version))?;
-            f.write_fmt(format_args!("{:28}{}\n", "  User:", l.st_uid))?;
-            f.write_fmt(format_args!("{:28}{}\n", "  Group:", l.st_gid))?;
+
+            let uid = l.st_uid;
+            if let Some(user_name) = self.distro.and_then(|d| d.user_name(uid)) {
+                f.write_fmt(format_args!("{:28}{} / {}\n", "  User:", uid, user_name))?;
+            } else {
+                f.write_fmt(format_args!("{:28}{}\n", "  User:", uid))?;
+            }
+
+            let gid = l.st_gid;
+            if let Some(group_name) = self.distro.and_then(|d| d.group_name(gid)) {
+                f.write_fmt(format_args!("{:28}{} / {}\n", "  Group:", gid, group_name))?;
+            } else {
+                f.write_fmt(format_args!("{:28}{}\n", "  Group:", l.st_gid))?;
+            }
 
             let mode = l.st_mode;
-            f.write_fmt(format_args!("{:28}{:06o}\n", "  Mode:", mode))?;
             let access = lsperms(mode);
-            f.write_fmt(format_args!("{:28}{}\n", "  Access:", access))?;
+            f.write_fmt(format_args!("{:28}Mode: {:06o} Access: {}\n", "  Mode:", mode, access))?;
 
             if l.st_rdev != 0 {
                 f.write_fmt(format_args!("{:28}{}, {}\n", "  Device type:", dev_major(l.st_rdev), dev_minor(l.st_rdev)))?;
@@ -117,7 +130,7 @@ pub const fn make_dev(ma: u32, mi: u32) -> u32 {
     (ma << MINORBITS) | mi
 }
 
-impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
+impl<'a, 'd> WslFileAttributes<'a> for LxfsParsed<'a, 'd> {
     fn maybe(&self) -> bool {
         self.lxattrb.is_some() ||
         self.lxxattr.is_some()

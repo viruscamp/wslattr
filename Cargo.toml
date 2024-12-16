@@ -4,20 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = { version = "^4.5.23", features = ['derive'] }
-regex = "^1.1.11"
-time = { version = "^0.3.37", features = ['formatting'] }
-walkdir = "^2"
-windows-registry = "^0.3.0"
+clap = { version = "4.5", features = ['derive'] }
+regex = "1.11"
+time = { version = "0.3", features = ['formatting'] }
+walkdir = "2.5"
+windows-registry = "0.3"
 
 [dependencies.windows]
-version = "^0.58.0"
+version = "0.58"
 features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
     "Win32_System_Kernel",
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_System_WindowsProgramming",
     "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
 ]
