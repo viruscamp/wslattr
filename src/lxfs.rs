@@ -47,9 +47,9 @@ impl Default for EaLxattrbV1 {
 
 #[derive(Default)]
 pub struct LxfsParsed<'a, 'd> {
-    lxattrb: Option<Cow<'a, EaLxattrbV1>>,
-    lxxattr: Option<LxxattrParsed<'a>>,
-    symlink: Option<String>,
+    pub lxattrb: Option<Cow<'a, EaLxattrbV1>>,
+    pub lxxattr: Option<LxxattrParsed<'a>>,
+    pub symlink: Option<String>,
 
     pub distro: Option<&'d Distro>,
 }
@@ -155,6 +155,14 @@ impl<'a, 'd> WslFileAttributes<'a> for LxfsParsed<'a, 'd> {
                 } else if name == LXXATTR.as_bytes() {
                     let lxxattr_parsed = unsafe { parse_lxxattr(value.as_ref()) };
                     p.lxxattr = Some(lxxattr_parsed);
+
+                    /*
+                    let mut out = LxxattrOut::default();
+                    for e in &p.lxxattr.as_ref().unwrap().entries {
+                        out.add(e);
+                    }
+                    assert_eq!(value, &out.buff);
+                    */
                 }
             }
         }
@@ -225,16 +233,16 @@ struct LxxattrEntry<'a> {
     pub value: Cow<'a, [u8]>,
 }
 
-/// |Offset      |Size|Note|
-/// |------------|----|----|
-/// |0           |4   |Always 00 00 01 00|
-/// |4           |4   |Next entry relative offset. Zero if last. (A)|
-/// |8           |2   |Length of xattr value. (B)|
-/// |10          |1   |Length of xattr name. (C)|
-/// |11          |C   |xattr name. UTF-8. No null terminator.|
-/// |11 + C      |B   |xattr value.|
-/// |11 + B + C  |1   |Unknown. Even if change to a random value, WSL does not worry. should be aligned|
-/// |4 + A       |    |Repeat above six elements.|
+/// |Offset     |Size|Note|
+/// |-----------|----|----|
+/// |0          |4   |Next entry relative offset. Zero if last. (A)|
+/// |4          |2   |Length of xattr value. (B)|
+/// |6          |1   |Length of xattr name. (C)|
+/// |7          |C   |xattr name. UTF-8. No null terminator.|
+/// |7 + C      |B   |xattr value.|
+/// |7 + B + C  |1   |Unknown. Even if change to a random value, WSL does not worry.|
+/// |A          |    |Repeat above six elements.|
+#[repr(C)]
 struct LxxattrEntryRaw {
     next_entry_offset: u32,
     value_length: u16,
@@ -245,23 +253,28 @@ struct LxxattrEntryRaw {
     value: [u8; 0],
 }
 
+impl LxxattrEntryRaw {
+    fn size(&self) -> usize {
+        Self::size_inner(self.name_length, self.value_length)
+    }
+
+    fn size_inner(name_len: u8, value_len: u16) -> usize {
+        let data_len = offset_of!(LxxattrEntryRaw, name) + name_len as usize + value_len as usize + 1;
+        //let full_len = (data_len + LXXATTR_ALIGN - 1) / LXXATTR_ALIGN * LXXATTR_ALIGN;
+        // not aligned
+        return data_len;
+    }
+}
+
+/// |Offset     |Size|Note|
+/// |-----------|----|----|
+/// |0          |4   |Always 00 00 01 00|
+/// |4          |4   |LxxattrEntryRaw+|
 #[repr(C)]
 struct LxxattrRaw {
     flags: u16,            // 0
     version: u16,          // 1
-    entries: LxxattrEntryRaw,
-}
-
-const LXXATTR_ALIGN: usize = size_of::<u32>();
-
-fn lxxattr_entry_size(pea: &LxxattrEntryRaw) -> usize {
-    lxxattr_entry_size_inner(pea.name_length, pea.value_length)
-}
-
-fn lxxattr_entry_size_inner(name_len: u8, value_len: u16) -> usize {
-    let data_len = offset_of!(LxxattrEntryRaw, name) + name_len as usize + value_len as usize;
-    let full_len = (data_len + 1) / LXXATTR_ALIGN * LXXATTR_ALIGN;
-    return full_len;
+    entries: [LxxattrEntryRaw; 1],
 }
 
 pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> LxxattrParsed<'a> {
@@ -280,7 +293,7 @@ pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> LxxattrParsed<'a> {
     loop {
         assert!(ea_ptr.add(size_of::<LxxattrEntryRaw>()) <= buf_range.end);
         let pea: &LxxattrEntryRaw = transmute(ea_ptr);
-        let pea_end = ea_ptr.add(lxxattr_entry_size(pea));
+        let pea_end = ea_ptr.add(pea.size());
 
         // invalid ea data may cause read overflow
         assert!(pea_end <= buf_range.end);
@@ -304,6 +317,51 @@ pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> LxxattrParsed<'a> {
     
     LxxattrParsed {
         entries,
+    }
+}
+
+
+#[derive(Default)]
+pub struct LxxattrOut {
+    pub buff: Vec<u8>,
+
+    // pos, size
+    last_attr_info: Option<(usize, usize)>,
+}
+
+impl LxxattrOut {
+    pub fn add(&mut self, entry: &LxxattrEntry) {
+        if self.buff.is_empty() {
+            // TODO how about big endian?
+            self.buff = vec![0, 0, 1, 0];
+        }
+        unsafe {
+            let this_size = LxxattrEntryRaw::size_inner(entry.name.len() as u8, entry.value.len() as u16);
+            self.buff.resize(self.buff.len() + this_size, 0);
+
+            let this_pos = if let Some(last_attr_info) = self.last_attr_info {                
+                let last_attr_ptr = self.buff.as_mut_ptr().add(last_attr_info.0);
+                let last_attr: &mut LxxattrEntryRaw = transmute(last_attr_ptr);
+                last_attr.next_entry_offset = last_attr_info.1 as u32;
+                last_attr_info.0 + last_attr_info.1
+            } else {
+                4
+            };
+
+            let pea: *mut u8 = self.buff.as_mut_ptr().add(this_pos);
+            let ea: &mut LxxattrEntryRaw = transmute(pea);
+            ea.next_entry_offset = 0;
+
+            ea.name_length = entry.name.as_ref().len() as u8;
+            let pname: *mut u8 = pea.add(offset_of!(LxxattrEntryRaw, name));
+            std::ptr::copy_nonoverlapping(entry.name.as_ref().as_ptr(), pname, ea.name_length as usize);
+
+            ea.value_length = entry.value.as_ref().len() as u16;
+            let pvalue: *mut u8 = pname.add(ea.name_length as usize);
+            std::ptr::copy_nonoverlapping(entry.value.as_ref().as_ptr(), pvalue, ea.value_length as usize);
+
+            self.last_attr_info = Some((this_pos, this_size));
+        }
     }
 }
 

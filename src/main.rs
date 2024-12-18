@@ -141,7 +141,7 @@ fn main() {
             },
             SetEa { path, name, value } => {
                 let wsl_file = unsafe { open_handle(&path, true) }.unwrap();
-                set_ea(wsl_file.file_handle, &name, value.as_ref().map(|v| v.as_str()));
+                set_ea(wsl_file.file_handle, name.as_bytes(), value.as_ref().map(|v| v.as_bytes()));
             },
         }
 
@@ -251,6 +251,7 @@ fn chmod(args: ArgsChange, modes: String) {
         if let Some(mode) = wslfs.get_mode() {
             if let Ok(newmode) = chmod_all(mode, &modes) {
                 println!("WslFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
+
             } else {
                 println!("invalid mode: {}", modes);
             }
@@ -282,13 +283,13 @@ fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u
     }
 }
 
-fn set_ea(file_handle: HANDLE, name: &str, value: Option<&str>) {
+fn set_ea(file_handle: HANDLE, name: &[u8], value: Option<&[u8]>) {
     // add, change, delete
     let mut ea_out = EaOut::default();
     ea_out.add(&EaEntryRaw {
         flags: 0,
-        name: name.as_bytes(),
-        value: value.unwrap_or("").as_bytes(),
+        name: name,
+        value: value.unwrap_or(&[0;0]),
     });
     unsafe {
         let _ = ntfs_io::write_ea(file_handle, &ea_out.buff);
