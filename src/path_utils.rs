@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path, Prefix};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 pub fn is_unix_absolute<P: AsRef<Path>>(path: P) -> bool {
     path.as_ref().starts_with("/")
@@ -21,6 +21,14 @@ pub fn is_path_prefix_disk(prefix: &Option<Prefix>) -> bool {
     }
 }
 
+pub fn normalize_path(path: &Path) -> std::io::Result<PathBuf> {
+    use normpath::PathExt;
+    use dunce::simplified;
+
+    let p = path.normalize_virtually()?;
+    Ok(simplified(p.as_path()).to_path_buf())
+}
+
 pub fn is_server_wsl(server: &OsStr) -> bool {
     let s = server.to_ascii_lowercase();
     s == "wsl$" || s == "wsl.localhost"
@@ -38,7 +46,7 @@ pub fn try_get_distro_from_unc_prefix<'a>(prefix: &'a Prefix<'a>) -> Option<&'a 
     }
 }
 
-/// only r"\\wsl$\{distro}\**" or r"\\wsl.localhost\{distro}\**" will return Some("{distro}")
+/// only `r"\\wsl$\{distro}\**"` or `r"\\wsl.localhost\{distro}\**"` will return `Some("{distro}")`
 pub fn try_get_distro_from_unc_path(abs_path: &Path) -> Option<OsString> {
     try_get_abs_path_prefix(abs_path)
         .as_ref()

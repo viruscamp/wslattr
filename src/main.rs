@@ -5,11 +5,11 @@ use ea_parse::{EaEntry, EaEntryRaw, EaOut};
 use lxfs::{EaLxattrbV1, LxfsParsed, LXATTRB};
 use ntfs_io::{delete_reparse_point, query_file_basic_infomation, write_data};
 use path_utils::*;
-use distro::Distro;
-use posix::{chmod, lsperms, StModeType};
+use distro::{Distro, DistroSource, FsType};
+use posix::{chmod_all, lsperms, StModeType};
 use time_utils::LxfsTime;
 use windows::Win32::Foundation::HANDLE;
-use wsl_file::{WslFile, WslFileAttributes};
+use wsl_file::{open_handle, WslFile, WslFileAttributes};
 use wslfs::WslfsParsed;
 
 mod distro;
@@ -23,30 +23,74 @@ mod time_utils;
 mod posix;
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version, about, long_about = None, args_conflicts_with_subcommands = true)]
 struct Args {
-    /// file path
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    #[clap(flatten)]
+    args_view: Option<ArgsView>,
+}
+
+#[derive(Parser, Debug)]
+struct ArgsView {
+    /// file to view
     path: PathBuf,
 
+    /// WSL distro from registry, for user and group name
+    #[arg(long, short)]
+    distro: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+struct ArgsChange {
+    /// file to change
+    path: PathBuf,
+
+    /// WSL distro from registry, to get WSL1 fs type
     #[arg(long, short)]
     distro: Option<String>,
 
-    #[arg(long, short)]
+    /// WSL1 fs type
+    #[arg(long, short = 't')]
     fs_type: Option<distro::FsType>,
-
-    #[command(subcommand)]
-    command: Option<Command>,
 }
 
-#[derive(Subcommand, PartialEq, Debug)]
+#[derive(Subcommand, Debug)]
 enum Command {
-    Chown,
-    Chgrp,
+    View(ArgsView),
+    Chown {
+        #[clap(flatten)]
+        args_change: ArgsChange,
+        /// uid or user name(with valid distro)
+        user: String,
+    },
+    Chgrp {
+        #[clap(flatten)]
+        args_change: ArgsChange,
+        /// gid or group name(with valid distro)
+        group: String,
+    },
     Chmod {
+        #[clap(flatten)]
+        args_change: ArgsChange,
+        /// posix modes string, "0844", "u+x,g-t"
         modes: String,
     },
-    Downgrade,
+    Downgrade {
+        /// file to change
+        #[clap(conflicts_with("distro"))]
+        path: Option<PathBuf>,
+
+        /// WSL distro from registry, to get WSL1 fs type
+        #[clap(conflicts_with("path"))]
+        #[arg(long, short)]
+        distro: Option<String>,
+    },
     SetEa {
+        /// file to change
+        path: PathBuf,
+
         #[arg(long, short)]
         name: String,
     
@@ -57,12 +101,62 @@ enum Command {
 
 /// inspect WSL1 lxfs or wslfs attributes from windows
 fn main() {
+    use Command::*;
+
     let args = Args::parse();
     println!("args: {:?}!", args);
 
-    let distro = try_load_distro(args.distro.as_ref());
+    if let Some(cmd) = args.command {
+        match cmd {
+            View(args_view) => view(args_view),
+            Chown { args_change, user } => chown(args_change, user),
+            Chgrp { args_change, group } => chgrp(args_change, group),
+            Chmod { args_change, modes } => chmod(args_change, modes),
+            Downgrade { path, distro } => {
+                if path.is_some() && distro.is_some() {
+                    println!("[ERROR] path and distro args are conflicted");
+                    return;
+                }
+                if path.is_none() && distro.is_none() {
+                    println!("[ERROR] there must be one of path or distro args");
+                    return;
+                }
+                if let Some(name) = distro {
+                    if let Some(d) = distro::try_load(&name) {
+                        if d.fs_type.is_none() {
+                            // TODO should panic
+                            print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+                            return;
+                        }
+                        downgrade_distro(&d);
+                    } else {
+                        println!("[ERROR] there must be one of path or distro args");
+                        return;
+                    }
+                } else if let Some(path) = path {
+                    open_to_view(ArgsView { path, distro: None }, |mut wsl_file, wslfs, lxfs| {
+                        downgrade(&mut wsl_file, &wslfs, &lxfs);
+                    });
+                }
+            },
+            SetEa { path, name, value } => {
+                let wsl_file = unsafe { open_handle(&path, true) }.unwrap();
+                set_ea(wsl_file.file_handle, &name, value.as_ref().map(|v| v.as_str()));
+            },
+        }
 
-    if let Some(mut wsl_file) = load_wsl_file(&args.path, &distro) {
+    } else if let Some(args_view) = args.args_view {
+        view(args_view);
+    } else {
+        // fail
+        print!("argument <PATH> or command must be provided")
+    }
+}
+
+fn open_to_view(args: ArgsView, f: impl FnOnce(WslFile, WslfsParsed, LxfsParsed) -> ()) {
+    let distro = try_load_distro(args.distro.as_ref(), Some(&args.path));
+
+    if let Some(wsl_file) = load_wsl_file(&args.path, distro.as_ref()) {
         let ea_buffer = wsl_file.read_ea().unwrap_or(None);
 
         if ea_buffer.is_none() {
@@ -74,51 +168,102 @@ fn main() {
             ea_parse::parse_ea(&ea_buffer)
         });
 
-        print_file_time(wsl_file.file_handle);
-
         let mut wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
         wslfs.distro = distro.as_ref();
-        println!("{wslfs}");
     
         let mut lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
         lxfs.distro = distro.as_ref();
+
+        f(wsl_file, wslfs, lxfs)
+    } else {
+        println!("[ERROR] load file failed");
+    }
+}
+
+fn view(args_view: ArgsView) {
+    open_to_view(args_view, |wsl_file, wslfs, lxfs| {        
+        print_file_time(wsl_file.file_handle);
+        println!("{wslfs}");
         println!("{lxfs}");
+    });
+}
 
-        if let Some(cmd) = args.command {
-            match cmd {
-                Command::Chown => todo!(),
-                Command::Chgrp => todo!(),
-                Command::Chmod { modes } => {
-                    if let Some(mode) = wslfs.get_mode() {
-                        if let Ok(newmode) = chmod(mode, &modes) {
-                            println!("new mode: {:06o} , {}", newmode, lsperms(newmode));
-                        } else {
-                            println!("invalid modes: {}", modes);
-                        }
-                    }
+fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, FsType, WslfsParsed, LxfsParsed) -> ()) {
+    let distro = try_load_distro(args.distro.as_ref(), Some(&args.path));
 
-                    if let Some(mode) = lxfs.get_mode() {
-                        if let Ok(newmode) = chmod(mode, &modes) {
-                            println!("new mode: {:06o} , {}", newmode, lsperms(newmode));
-                        } else {
-                            println!("invalid modes: {}", modes);
-                        }
-                    }              
-                },
-                Command::Downgrade => {
-                    if let Some(d) = &distro {
-                        downgrade_distro(d);
-                    } else {
-                        downgrade(&mut wsl_file, &wslfs, &lxfs);
-                    }
-                },
-                Command::SetEa { name, value } => {
-                    //test_ea_write(&ea_buffer, &ea_parsed);
-                    set_ea(&mut wsl_file, &name, value.as_ref().map(String::as_str));
-                }
+    if let Some(wsl_file) = load_wsl_file(&args.path, distro.as_ref()) {
+        let ea_buffer = wsl_file.read_ea().unwrap_or(None);
+
+        if ea_buffer.is_none() {
+            println!("no EAs exist");
+        }
+        
+        let ea_parsed = ea_buffer.as_ref()
+        .map(|ea_buffer| {
+            ea_parse::parse_ea(&ea_buffer)
+        });
+
+        let mut wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
+        wslfs.distro = distro.as_ref();
+    
+        let mut lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
+        lxfs.distro = distro.as_ref();
+
+        let fs_type = if let Some(fs_type) = args.fs_type {
+            println!("use fs_type: {:?} from arg --fs_type", fs_type);
+            fs_type
+        } else if let Some(d) = distro.as_ref().filter(|d| d.source == DistroSource::Arg && d.fs_type.is_some()) {
+            let fs_type = d.fs_type.unwrap();
+            println!("use fs_type: {:?} from arg --distro {}", fs_type, &d.name);
+            fs_type
+        } else if wslfs.maybe() && lxfs.maybe() {
+            println!("[ERROR] cannot determine fs_type, cause both wslfs and lxfs metadata exist");
+            return;
+        } else if wslfs.maybe() {
+            FsType::Wslfs
+        } else if lxfs.maybe() {
+            FsType::Lxfs
+        } else {
+            println!("[ERROR] cannot determine fs_type, cause no wslfs nor lxfs metadata exists");
+            return;
+        };
+
+        f(wsl_file, fs_type, wslfs, lxfs)
+    } else {
+        println!("[ERROR] load file failed");
+    }
+}
+
+fn chown(args: ArgsChange, user: String) {
+    open_to_change(args, |wsl_file, fs_type, wslfs, lxfs| {
+
+    });
+}
+
+fn chgrp(args: ArgsChange, group: String) {
+    open_to_change(args, |wsl_file, fs_type, wslfs, lxfs| {
+
+    });
+}
+
+fn chmod(args: ArgsChange, modes: String) {
+    open_to_change(args, |wsl_file, fs_type, wslfs, lxfs| {
+        if let Some(mode) = wslfs.get_mode() {
+            if let Ok(newmode) = chmod_all(mode, &modes) {
+                println!("WslFS, {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
+            } else {
+                println!("invalid modes: {}", modes);
             }
         }
-    }
+    
+        if let Some(mode) = lxfs.get_mode() {
+            if let Ok(newmode) = chmod_all(mode, &modes) {
+                println!("LxFS, {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
+            } else {
+                println!("invalid modes: {}", modes);
+            }
+        }
+    });
 }
 
 fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u8]>>>) {
@@ -137,7 +282,7 @@ fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u
     }
 }
 
-fn set_ea(wsl_file: &mut WslFile, name: &str, value: Option<&str>) {
+fn set_ea(file_handle: HANDLE, name: &str, value: Option<&str>) {
     // add, change, delete
     let mut ea_out = EaOut::default();
     ea_out.add(&EaEntryRaw {
@@ -146,41 +291,83 @@ fn set_ea(wsl_file: &mut WslFile, name: &str, value: Option<&str>) {
         value: value.unwrap_or("").as_bytes(),
     });
     unsafe {
-        let _ = wsl_file.reopen_to_write();
-        let _ = ntfs_io::write_ea(wsl_file.file_handle, &ea_out.buff);
+        let _ = ntfs_io::write_ea(file_handle, &ea_out.buff);
     }
 }
 
-pub fn try_load_distro<S: AsRef<str>>(distro_from_arg: Option<S>) -> Option<Distro> {
-    None
-    .or(distro_from_arg.and_then(|name| {
-        println!("try load distro from arg: {}", name.as_ref());
-        distro::try_load(&name).or_else(|| {
-            panic!("failed to load distro from arg: {}", name.as_ref())
-        })
-    }))
-    .or_else(|| {
-        match std::env::current_dir() {
-            Ok(cd) => {
-                println!("try load distro from current dir: {}", &cd.display());
-                try_get_distro_from_unc_path(&cd)
-                .and_then(|n| distro::try_load(&n.to_string_lossy()))                
-            },
-            Err(_) => None,
+fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: Option<P>) -> Option<Distro> {
+    // try load distro fron argument
+    if let Some(distro_name) = arg_distro {
+        let distro_name = distro_name.as_ref();
+        //println!("try load distro fron arg: {}", distro_name);
+        let distro = distro::try_load(distro_name);
+        if let Some(mut d) = distro {
+            d.source = DistroSource::Arg;
+            if d.fs_type.is_none() {
+                // TODO should panic
+                print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+                return None;
+            }
+            println!("distro: {} loaded from arg", distro_name);
+            return Some(d);
+        } else {
+            // TODO should panic
+            print!("[ERROR] cannot load WSL distro: {}", distro_name);
+            return None;
         }
-    })
-    .or_else(|| {
-        println!("try load distro from reg");
-        distro::default()
-    })
-    .inspect(|d| {
+    }
+
+    // try load distro fron file path
+    if let Some(p) = path {
+        let in_path = p.as_ref();
+        if !is_unix_absolute(in_path) && in_path.is_absolute() {
+            //println!("try load distro fron file path: {}", in_path.display());
+            let distro = distro::try_load_from_absolute_path(in_path);
+            if let Some(mut d) = distro {
+                d.source = DistroSource::FilePath;
+                if d.fs_type.is_none() {
+                    // TODO should panic
+                    print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+                    return None;
+                }
+                println!("distro: {} loaded from file path: {}", &d.name, in_path.display());
+                return Some(d);
+            }
+        }
+    }    
+
+    // try load distro fron current path
+    if let Ok(cd) = std::env::current_dir() {
+        //println!("try load distro from current dir: {}", &cd.display());
+        let distro = distro::try_load_from_absolute_path(&cd);
+        if let Some(mut d) = distro {
+            d.source = DistroSource::CurrentDir;
+            if d.fs_type.is_none() {
+                // TODO should panic
+                print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+                return None;
+            }
+            println!("distro: {} loaded from current dir: {}", &d.name, cd.display());
+            return Some(d);
+        }
+    }
+
+    // try load default WSL distro in registry
+    if let Some(d) = distro::default() {
         if d.fs_type.is_none() {
-            panic!("WSL2 distro {} is not supported", d.name);
+            // TODO should panic
+            print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+            return None;
         }
-    })
+        println!("distro: {} loaded from default WSL distro in registry", &d.name);
+        return Some(d);
+    }
+
+    println!("no distro loaded");
+    return None;
 }
 
-fn load_wsl_file(in_path: &Path, distro_from_arg: &Option<Distro>) -> Option<WslFile> {
+fn load_wsl_file(in_path: &Path, distro: Option<&Distro>) -> Option<WslFile> {
     let full_path;
     let real_path;
 
@@ -188,7 +375,7 @@ fn load_wsl_file(in_path: &Path, distro_from_arg: &Option<Distro>) -> Option<Wsl
         // unix path with root like r"/usr/bin"
         println!("unix path: {:?}", in_path);
 
-        let d = distro_from_arg.as_ref().expect("argument --distro is needed for unix path");
+        let d = distro.expect("argument --distro is needed for unix path");
         //println!("distro: {:?}", d);
 
         let mut unix_path_comps = in_path.components();
@@ -203,6 +390,7 @@ fn load_wsl_file(in_path: &Path, distro_from_arg: &Option<Distro>) -> Option<Wsl
             // wsl UNC path like r"\\wsl$\Arch\file"
             println!("try load distro from wsl path: {:?}!", distro_name);
 
+            // TODO distro has been loaded
             let distro = distro::try_load(&distro_name.to_str()?);
             let d = distro.as_ref().expect(&format!("invalid distro: {:?}", distro_name));
             //println!("distro: {:?}", d);

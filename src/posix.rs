@@ -112,7 +112,7 @@ pub fn lsperms(mode: u32) -> String {
     return String::from_utf8_lossy(&bits).into_owned();
 }
 
-pub fn chmod(mut mode: u32, mode_strs: &str) -> Result<u32, ()> {
+pub fn chmod_all(mut mode: u32, mode_strs: &str) -> Result<u32, ()> {
     for mode_str in mode_strs.split(',') {
         mode = chmod_part(mode, mode_str.trim())?;
     }

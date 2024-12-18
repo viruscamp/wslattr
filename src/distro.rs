@@ -1,15 +1,27 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use clap::ValueEnum;
 use windows_registry::{Key, CURRENT_USER};
 
 use crate::posix::{load_groups, load_users, Group, User};
+use crate::{is_path_prefix_disk, normalize_path, try_get_abs_path_prefix, try_get_distro_from_unc_path};
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
+#[derive(PartialEq, Eq)]
 pub enum FsType {
     Lxfs,
     Wslfs,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[derive(PartialEq, Eq)]
+pub enum DistroSource {
+    Unknown,
+    Arg,
+    Default,
+    CurrentDir,
+    FilePath,
 }
 
 #[derive(Debug)]
@@ -17,6 +29,8 @@ pub struct Distro {
     pub name: String,
     pub base_path: PathBuf,
     pub fs_type: Option<FsType>, // None means WSL2
+
+    pub source: DistroSource,
 
     pub users: Option<Vec<User>>,
     pub groups: Option<Vec<Group>>,
@@ -27,7 +41,9 @@ const REG_LXSS: &'static str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss"
 pub fn default() -> Option<Distro> {
     let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
     let default_distro_guid = lxss.get_string("DefaultDistribution").ok()?;
-    return try_load_from_reg_key(lxss.open(default_distro_guid).ok()?); 
+    let mut d = try_load_from_reg_key(lxss.open(default_distro_guid).ok()?)?;
+    d.source = DistroSource::Default;
+    return Some(d);
 }
 
 pub fn try_load<S: AsRef<str>>(name: S) -> Option<Distro> {
@@ -43,6 +59,34 @@ pub fn try_load<S: AsRef<str>>(name: S) -> Option<Distro> {
     })
     .nth(0)
     .and_then(try_load_from_reg_key)
+}
+
+pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
+    if let Some(n) = try_get_distro_from_unc_path(path.as_ref()) {
+        return try_load(&n.to_string_lossy());
+    }
+
+    if is_path_prefix_disk(&try_get_abs_path_prefix(path.as_ref())) {
+        let path = normalize_path(path.as_ref()).ok()?;
+
+        let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
+        return lxss.keys().ok()?
+        .filter_map(|k| lxss.open(k).ok())
+        .filter(|k| {
+            if let Ok(s) = k.get_string("BasePath") {
+                if let Ok(base_path) = PathBuf::from_str(&s) {
+                    if let Ok(base_path) = normalize_path(&base_path) {
+                        return path.starts_with(base_path);
+                    }
+                }
+            }
+            return false;
+        })
+        .nth(0)
+        .and_then(try_load_from_reg_key);
+    }
+
+    return None;
 }
 
 pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
@@ -74,6 +118,7 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
         name,
         base_path,
         fs_type,
+        source: DistroSource::Unknown,
         users,
         groups,
     });
