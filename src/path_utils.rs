@@ -46,7 +46,7 @@ pub fn try_get_distro_from_unc_prefix<'a>(prefix: &'a Prefix<'a>) -> Option<&'a 
     }
 }
 
-/// only `r"\\wsl$\{distro}\**"` or `r"\\wsl.localhost\{distro}\**"` will return `Some("{distro}")`
+/// only `r"\\wsl$\{distro}\**"` and `r"\\wsl.localhost\{distro}\**"` return `Some("{distro}")`
 pub fn try_get_distro_from_unc_path(abs_path: &Path) -> Option<OsString> {
     try_get_abs_path_prefix(abs_path)
         .as_ref()

@@ -47,35 +47,35 @@ struct ArgsChange {
     /// file to change
     path: PathBuf,
 
+    /// WSL1 fs type, if provided ignore fs type from `--distro`
+    #[arg(long, short = 't')]
+    fs_type: Option<distro::FsType>,
+
     /// WSL distro from registry, to get WSL1 fs type
     #[arg(long, short)]
     distro: Option<String>,
-
-    /// WSL1 fs type
-    #[arg(long, short = 't')]
-    fs_type: Option<distro::FsType>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
     View(ArgsView),
     Chown {
-        #[clap(flatten)]
-        args_change: ArgsChange,
         /// uid or user name(with valid distro)
         user: String,
+        #[clap(flatten)]
+        args_change: ArgsChange,
     },
     Chgrp {
-        #[clap(flatten)]
-        args_change: ArgsChange,
         /// gid or group name(with valid distro)
         group: String,
-    },
-    Chmod {
         #[clap(flatten)]
         args_change: ArgsChange,
+    },
+    Chmod {
         /// posix modes string, "0844", "u+x,g-t"
         modes: String,
+        #[clap(flatten)]
+        args_change: ArgsChange,
     },
     Downgrade {
         /// file to change
@@ -250,17 +250,17 @@ fn chmod(args: ArgsChange, modes: String) {
     open_to_change(args, |wsl_file, fs_type, wslfs, lxfs| {
         if let Some(mode) = wslfs.get_mode() {
             if let Ok(newmode) = chmod_all(mode, &modes) {
-                println!("WslFS, {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
+                println!("WslFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
             } else {
-                println!("invalid modes: {}", modes);
+                println!("invalid mode: {}", modes);
             }
         }
     
         if let Some(mode) = lxfs.get_mode() {
             if let Ok(newmode) = chmod_all(mode, &modes) {
-                println!("LxFS, {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
+                println!("LxFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
             } else {
-                println!("invalid modes: {}", modes);
+                println!("invalid mode: {}", modes);
             }
         }
     });

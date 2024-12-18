@@ -113,6 +113,14 @@ pub fn lsperms(mode: u32) -> String {
 }
 
 pub fn chmod_all(mut mode: u32, mode_strs: &str) -> Result<u32, ()> {
+    if let Ok(newmode) = u32::from_str_radix(mode_strs, 8) {
+        if mode_strs.len() <= 4 {
+            return Ok((mode & ST_MODE_TYPE_MASK) | (newmode & !ST_MODE_TYPE_MASK));
+        } else {
+            return Err(());
+        }
+    }
+
     for mode_str in mode_strs.split(',') {
         mode = chmod_part(mode, mode_str.trim())?;
     }
