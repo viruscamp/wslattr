@@ -6,7 +6,7 @@ use std::io::Result;
 use windows::Win32::Foundation::HANDLE;
 
 use crate::distro::Distro;
-use crate::ea_parse::{EaEntryCow, EaEntryRaw};
+use crate::ea_parse::{EaEntry, EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
 use crate::posix::{lsperms, StModeType};
 use crate::wsl_file::{open_file_inner, WslFile, WslFileAttributes};
@@ -26,13 +26,52 @@ pub struct WslfsParsed<'a, 'd> {
     pub lxmod: Option<Cow<'a, u32>>,
     pub lxdev: Option<Cow<'a, Lxdev>>,
 
-    pub lx_dot_ea: Vec<EaEntryCow<'a>>,
+    pub lx_dot_ea: Vec<LxDotAttrCow<'a>>,
 
     pub reparse_tag: Option<StModeType>,
 
     pub symlink: Option<String>,
 
     pub distro: Option<&'d Distro>,
+}
+
+pub struct LxDotAttr<Bytes: AsRef<[u8]>>(EaEntry<Bytes>);
+
+pub type LxDotAttrCow<'a> = LxDotAttr<Cow<'a, [u8]>>;
+
+impl<Bytes: AsRef<[u8]>> LxDotAttr<Bytes> {
+    pub fn name_ea<'x>(&self) -> &[u8] {
+        self.0.name.as_ref()
+    }
+
+    // Upper ASCII, should be converted before display
+    pub fn name(&self) -> Vec<u8> {
+        let name_ea = self.name_ea();
+        let name_raw = &name_ea[LX_DOT.len()..];
+        name_raw.to_ascii_lowercase()
+    }
+
+    pub fn name_display(&self) -> String {
+        String::from_utf8(self.name()).unwrap_or(String::from("NAME_ERROR"))
+    }
+
+    // remove 'lxea'
+    pub fn value(&self) -> &[u8] {
+        &self.0.value.as_ref()[4..]
+    }
+
+    pub fn value_display(&self) -> String {
+        use std::fmt::Write;
+
+        let bytes = self.value();
+        let mut out = String::with_capacity(bytes.len() + 16);
+
+        write!(&mut out, "\"").unwrap();
+        crate::escape_utils::escape_bytes_octal(bytes, &mut out, true).unwrap();
+        write!(&mut out, "\"").unwrap();
+
+        out
+    }
 }
 
 impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
@@ -83,9 +122,7 @@ impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
         if self.lx_dot_ea.len() > 0 {
             f.write_str("Linux extended attributes(LX.*):\n")?;
             for l in &self.lx_dot_ea {
-                let name = lx_dot_ea_name_display(&l.name);
-                let value_str = lx_dot_ea_value_display(&l.value);
-                f.write_fmt(format_args!("  {:26}{}\n", name.as_ref(), value_str))?;
+                f.write_fmt(format_args!("  {:26}{}\n", l.name_display(), l.value_display()))?;
             }
         }
         Ok(())
@@ -123,11 +160,11 @@ impl<'a, 'd> WslFileAttributes<'a> for WslfsParsed<'a, 'd> {
                 } else if ea.name == LXDEV.as_bytes() {
                     p.lxdev = Some(Cow::Owned(ea.get_ea::<Lxdev>().to_owned()));
                 } else if ea.name.starts_with(LX_DOT.as_bytes()) {
-                    p.lx_dot_ea.push(EaEntryCow {
+                    p.lx_dot_ea.push(LxDotAttr(EaEntryCow {
                         flags: ea.flags,
                         name: ea.name.to_owned().into(),
                         value: ea.value.to_owned().into(),
-                    });
+                    }));
                 }
             }
         }
@@ -317,17 +354,4 @@ pub unsafe fn set_wslfs_reparse_point(wsl_file: &mut WslFile, tag: StModeType, s
     write_reparse_point(wsl_file.file_handle, buf.as_mut_slice())?;
     wsl_file.reparse_tag = Some(reparse_tag_id);
     Ok(())
-}
-
-// TODO:  Upper ASCII, should be converted before display
-fn lx_dot_ea_name_display<'x>(name: &'x [u8]) -> impl AsRef<str> + 'x {
-    String::from_utf8_lossy(&name[LX_DOT.len()..]).to_ascii_lowercase()  
-}
-
-fn lx_dot_ea_value_display<'a>(value: &'a [u8]) -> Cow<'a, str> {
-    let bytes = &value[4..];
-    match std::str::from_utf8(bytes) {
-        Ok(s) => Cow::Borrowed(s),
-        Err(_) => Cow::Owned(bytes.escape_ascii().to_string()),
-    }
 }

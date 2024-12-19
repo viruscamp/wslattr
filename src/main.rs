@@ -2,7 +2,7 @@ use std::path::{absolute, Path, PathBuf};
 use clap::{arg, command, Parser, Subcommand};
 
 use ea_parse::{EaEntry, EaEntryRaw, EaOut};
-use lxfs::{EaLxattrbV1, LxfsParsed, LXATTRB};
+use lxfs::{EaLxattrbV1, LxfsParsed, LxxattrOut, LXATTRB, LXXATTR};
 use ntfs_io::{delete_reparse_point, query_file_basic_infomation, write_data};
 use path_utils::*;
 use distro::{Distro, DistroSource, FsType};
@@ -21,6 +21,7 @@ mod lxfs;
 mod wslfs;
 mod time_utils;
 mod posix;
+mod escape_utils;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None, args_conflicts_with_subcommands = true)]
@@ -251,9 +252,8 @@ fn chmod(args: ArgsChange, modes: String) {
         if let Some(mode) = wslfs.get_mode() {
             if let Ok(newmode) = chmod_all(mode, &modes) {
                 println!("WslFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
-
             } else {
-                println!("invalid mode: {}", modes);
+                println!("[ERROR]invalid mode: {}", modes);
             }
         }
     
@@ -261,7 +261,7 @@ fn chmod(args: ArgsChange, modes: String) {
             if let Ok(newmode) = chmod_all(mode, &modes) {
                 println!("LxFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
             } else {
-                println!("invalid mode: {}", modes);
+                println!("[ERROR]invalid mode: {}", modes);
             }
         }
     });
@@ -456,10 +456,16 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
         println!("{} maybe lxfs already", unsafe { wsl_file.full_path.Buffer.display() });
         return;
     }
-    let ea_to_remove = vec![wslfs::LXUID, wslfs::LXGID, wslfs::LXMOD, wslfs::LXDEV];
+    let mut ea_to_remove = vec![
+        wslfs::LXUID.as_bytes(),        
+        wslfs::LXGID.as_bytes(),
+        wslfs::LXMOD.as_bytes(),
+        wslfs::LXDEV.as_bytes()
+    ];
+
     let mut ea_out = EaOut::default();
 
-    // 1. for all files, write LXATTRB
+    // 1. for all files, set LXATTRB
     let mut lxattrb = EaLxattrbV1::default();
 
     lxattrb.st_uid = wslfs.get_uid().unwrap_or(0);
@@ -488,14 +494,23 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
         value: lxattrb_bytes,
     });
 
-    // 2. for all files, write LXXATTR, from LX.*
-    // TODO
+    // 2. for all files, set LXXATTR, from LX.*
+    let mut lxxattr_out = LxxattrOut::default();
+    for dot_ea in &wslfs.lx_dot_ea {
+        ea_to_remove.push(&dot_ea.name_ea());
+        lxxattr_out.add(&dot_ea.name(), &dot_ea.value());
+    }
+    ea_out.add(&EaEntryRaw {
+        flags: 0,
+        name: LXXATTR.as_bytes(),
+        value: &lxxattr_out.buff,
+    });
 
     // write EA
     for ea in ea_to_remove {
         ea_out.add(&EaEntryRaw {
             flags: 0,
-            name: ea.as_bytes(),
+            name: ea,
             value: "".as_bytes(),
         });
     }

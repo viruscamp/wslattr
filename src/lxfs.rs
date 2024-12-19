@@ -108,9 +108,7 @@ impl<'a, 'd> Display for LxfsParsed<'a, 'd> {
         if let Some(lxxattr) = &self.lxxattr {
             f.write_str("Linux extended attributes(LXXATTR):\n")?;
             for l in &lxxattr.entries {
-                let name = lxxattr_name_display(&l.name);
-                let value = lxxattr_value_display(&l.value);
-                f.write_fmt(format_args!("  {:26}{}\n", name, value))?;
+                f.write_fmt(format_args!("  {:26}{}\n", l.name_display(), l.value_display()))?;
             }
         }
         Ok(())
@@ -228,9 +226,28 @@ pub struct LxxattrParsed<'a> {
     entries: Vec<LxxattrEntry<'a>>,
 }
 
-struct LxxattrEntry<'a> {
+pub struct LxxattrEntry<'a> {
     pub name: Cow<'a, [u8]>,
     pub value: Cow<'a, [u8]>,
+}
+
+impl<'a> LxxattrEntry<'a> {
+    fn name_display(&self) -> String {
+        String::from_utf8_lossy(self.name.as_ref()).to_ascii_lowercase()
+    }
+
+    fn value_display(&'a self) -> String {
+        use std::fmt::Write;
+
+        let bytes = self.value.as_ref();
+        let mut out = String::with_capacity(bytes.len() + 16);
+
+        write!(&mut out, "\"").unwrap();
+        crate::escape_utils::escape_bytes_octal(bytes, &mut out, true).unwrap();
+        write!(&mut out, "\"").unwrap();
+
+        out
+    }
 }
 
 /// |Offset     |Size|Note|
@@ -330,13 +347,13 @@ pub struct LxxattrOut {
 }
 
 impl LxxattrOut {
-    pub fn add(&mut self, entry: &LxxattrEntry) {
+    pub fn add(&mut self, name: &[u8], value: &[u8]) {
         if self.buff.is_empty() {
             // TODO how about big endian?
             self.buff = vec![0, 0, 1, 0];
         }
         unsafe {
-            let this_size = LxxattrEntryRaw::size_inner(entry.name.len() as u8, entry.value.len() as u16);
+            let this_size = LxxattrEntryRaw::size_inner(name.len() as u8, value.len() as u16);
             self.buff.resize(self.buff.len() + this_size, 0);
 
             let this_pos = if let Some(last_attr_info) = self.last_attr_info {                
@@ -352,27 +369,15 @@ impl LxxattrOut {
             let ea: &mut LxxattrEntryRaw = transmute(pea);
             ea.next_entry_offset = 0;
 
-            ea.name_length = entry.name.as_ref().len() as u8;
+            ea.name_length = name.len() as u8;
             let pname: *mut u8 = pea.add(offset_of!(LxxattrEntryRaw, name));
-            std::ptr::copy_nonoverlapping(entry.name.as_ref().as_ptr(), pname, ea.name_length as usize);
+            std::ptr::copy_nonoverlapping(name.as_ptr(), pname, ea.name_length as usize);
 
-            ea.value_length = entry.value.as_ref().len() as u16;
+            ea.value_length = value.as_ref().len() as u16;
             let pvalue: *mut u8 = pname.add(ea.name_length as usize);
-            std::ptr::copy_nonoverlapping(entry.value.as_ref().as_ptr(), pvalue, ea.value_length as usize);
+            std::ptr::copy_nonoverlapping(value.as_ptr(), pvalue, ea.value_length as usize);
 
             self.last_attr_info = Some((this_pos, this_size));
         }
-    }
-}
-
-// TODO:  Upper ASCII, should be converted before display
-fn lxxattr_name_display(name: impl AsRef<[u8]>) -> String {
-    String::from_utf8_lossy(name.as_ref()).to_ascii_lowercase()
-}
-
-fn lxxattr_value_display<'a>(value: &'a [u8]) -> Cow<'a, str> {
-    match std::str::from_utf8(value) {
-        Ok(s) => Cow::Borrowed(s),
-        Err(_) => Cow::Owned(value.escape_ascii().to_string()),
     }
 }
