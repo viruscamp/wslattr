@@ -59,14 +59,8 @@ pub fn unescape(value: &str) -> Option<Vec<u8>> {
         STANDARD.decode(&value[2..]).ok()
     } else if value.starts_with("0x") || value.starts_with("0X") {
         unescape_hex(&value[2..]).ok()
-    } else if value.starts_with('"') {
-        if value.ends_with('"') {
-            unescape_octal(&value[1..(value.len()-1)]).ok()
-        } else {
-            None
-        }
     } else {
-        Some(value.as_bytes().into())
+        unescape_octal(value).ok()
     }
 }
 
@@ -74,6 +68,9 @@ fn unescape_octal(value: &str) -> Result<Vec<u8>, ()> {
     let mut out = vec![];
     let mut next = &value[0..];
     while let Some(pos) = next.find(r"\") {
+        for b in next[..pos].as_bytes() {
+            out.push(*b);
+        }
         if &next[pos..pos+2] == r#"\""# {
             out.push('"' as u8);
             next = &next[pos+2..];
@@ -107,4 +104,32 @@ fn unescape_hex(value: &str) -> Result<Vec<u8>, ()> {
         out.push(b);
     }
     Ok(out)
+}
+
+#[test]
+fn test_unescape() {
+    let a = unescape("0x61625c745c6e1b24").unwrap();
+    let b = unescape("0sYWJcdFxuGyQ=").unwrap();
+
+    assert_eq!(a, b);
+    
+    let c = unescape(r#"ab\\t\\n\033$"#).unwrap();
+    assert_eq!(a, c);
+}
+
+#[test]
+fn test_escape() {
+    let v = unescape("0x61625c745c6e1b24").unwrap();
+
+    let mut repr = String::new();
+    escape_bytes_hex(v.as_slice(), &mut repr).unwrap();
+    assert_eq!("61625c745c6e1b24", repr);
+
+    let mut repr = String::new();
+    escape_bytes_base64(v.as_slice(), &mut repr).unwrap();
+    assert_eq!("YWJcdFxuGyQ=", repr);
+
+    let mut repr = String::new();
+    escape_bytes_octal(v.as_slice(), &mut repr, false).unwrap();
+    assert_eq!(r#"ab\\t\\n\033$"#, repr);
 }

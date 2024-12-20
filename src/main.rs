@@ -64,18 +64,21 @@ enum Command {
         /// uid or user name(with valid distro)
         user: String,
         #[clap(flatten)]
+        
         args_change: ArgsChange,
     },
     Chgrp {
         /// gid or group name(with valid distro)
         group: String,
         #[clap(flatten)]
+
         args_change: ArgsChange,
     },
     Chmod {
         /// posix modes string, "0844", "u+x,g-t"
         modes: String,
         #[clap(flatten)]
+
         args_change: ArgsChange,
     },
     Downgrade {
@@ -142,7 +145,8 @@ fn main() {
             },
             SetEa { path, name, value } => {
                 let wsl_file = unsafe { open_handle(&path, true) }.unwrap();
-                set_ea(wsl_file.file_handle, name.as_bytes(), value.as_ref().map(|v| v.as_bytes()));
+                let value_bytes = value.map(|v| escape_utils::unescape(&v).expect("invalid value"));
+                set_ea(wsl_file.file_handle, name.as_bytes(), value_bytes.as_ref().map(|v| v.as_slice()));
             },
         }
 
