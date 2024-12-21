@@ -79,7 +79,7 @@ impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
         //Symlink:                   -> target
         //$LXUID:                    Uid: 0 / user1
         //$LXGID:                    Gid: 0
-        //$LXMOD:                    Mode: 100755 Access: (0755) -rwxr-xr-x
+        //$LXMOD:                    Mode: 060644 Access: brw-r--r--
         //$LXDEV:                    Device type: 37,13
         //Linux extended attributes(LX.*):
         //  user.xdg.origin.url:     http://example.url

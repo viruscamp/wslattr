@@ -11,8 +11,8 @@ pub const LXXATTR: &'static str = "LXXATTR";
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct EaLxattrbV1 {
-    flags: u16,            // 0
-    version: u16,          // 1
+    flags: u16,             // 0
+    version: u16,           // 1
 
     pub st_mode: u32,       // Mode bit mask constants: https://msdn.microsoft.com/en-us/library/3kyc8381.aspx
     pub st_uid: u32,        // Numeric identifier of user who owns file (Linux-specific).
@@ -21,9 +21,9 @@ pub struct EaLxattrbV1 {
     pub st_atime_nsec: u32, // Time of last access of file (nano-seconds).
     pub st_mtime_nsec: u32, // Time of last modification of file (nano-seconds).
     pub st_ctime_nsec: u32, // Time of change of file (nano-seconds).
-    pub st_atime: u64,    // Time of last access of file.
-    pub st_mtime: u64,    // Time of last modification of file.
-    pub st_ctime: u64,    // Time of change of file.
+    pub st_atime: u64,      // Time of last access of file.
+    pub st_mtime: u64,      // Time of last modification of file.
+    pub st_ctime: u64,      // Time of change of file.
 }
 
 impl Default for EaLxattrbV1 {
@@ -268,6 +268,7 @@ struct LxxattrEntryRaw {
     name: [u8; 0],
     /// xattr value.
     value: [u8; 0],
+    _byte: u8,
 }
 
 impl LxxattrEntryRaw {
@@ -276,7 +277,7 @@ impl LxxattrEntryRaw {
     }
 
     fn size_inner(name_len: u8, value_len: u16) -> usize {
-        let data_len = offset_of!(LxxattrEntryRaw, name) + name_len as usize + value_len as usize + 1;
+        let data_len = size_of::<LxxattrEntryRaw>() + name_len as usize + value_len as usize;
         //let full_len = (data_len + LXXATTR_ALIGN - 1) / LXXATTR_ALIGN * LXXATTR_ALIGN;
         // not aligned
         return data_len;
