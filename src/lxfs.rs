@@ -1,6 +1,10 @@
-use std::{borrow::Cow, fmt::Display, mem::{offset_of, transmute}, ptr::{addr_of, slice_from_raw_parts}};
+use std::borrow::Cow;
+use std::mem::{offset_of, transmute};
+use std::ptr::{addr_of, slice_from_raw_parts};
 
-use crate::{distro::Distro, ea_parse::{force_cast, EaEntry, EaEntryRaw}, posix::{lsperms, StModeType}};
+use crate::distro::Distro;
+use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
+use crate::posix::{lsperms, StModeType};
 use crate::ntfs_io::read_data;
 use crate::time_utils::LxfsTime; 
 use crate::wsl_file::{WslFile, WslFileAttributes};
@@ -46,16 +50,33 @@ impl Default for EaLxattrbV1 {
 }
 
 #[derive(Default)]
-pub struct LxfsParsed<'a, 'd> {
+pub struct LxfsParsed<'a> {
     pub lxattrb: Option<Cow<'a, EaLxattrbV1>>,
-    pub lxxattr: Option<LxxattrParsed<'a>>,
+    // do not keep deleted
+    pub lxxattr: Option<Vec<LxxattrEntry<'a>>>,
     pub symlink: Option<String>,
-
-    pub distro: Option<&'d Distro>,
 }
 
-impl<'a, 'd> Display for LxfsParsed<'a, 'd> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+const MINORBITS: usize = 20;
+const MINORMASK: u32 = (1u32 << MINORBITS) - 1;
+
+const fn dev_major(dev: u32) -> u32 {
+    dev >> MINORBITS
+}
+const fn dev_minor(dev: u32) -> u32 {
+    dev & MINORMASK
+}
+pub const fn make_dev(ma: u32, mi: u32) -> u32 {
+    (ma << MINORBITS) | mi
+}
+
+impl<'a> WslFileAttributes<'a> for LxfsParsed<'a,> {
+    fn maybe(&self) -> bool {
+        self.lxattrb.is_some() ||
+        self.lxxattr.is_some()
+    }
+    
+    fn fmt(&self, f: &mut dyn std::io::Write, distro: Option<&Distro>) -> std::io::Result<()> {
         //Symlink:                   -> target
         //LXATTRB:
         //  Flags:                   0
@@ -75,19 +96,19 @@ impl<'a, 'd> Display for LxfsParsed<'a, 'd> {
         }
 
         if let Some(l) = &self.lxattrb {
-            f.write_str("LXATTRB:\n")?;
+            f.write("LXATTRB:\n".as_bytes())?;
             f.write_fmt(format_args!("{:28}{}\n", "  Flags:", l.flags))?;
             f.write_fmt(format_args!("{:28}{}\n", "  Version:", l.version))?;
 
             let uid = l.st_uid;
-            if let Some(user_name) = self.distro.and_then(|d| d.user_name(uid)) {
+            if let Some(user_name) = distro.and_then(|d| d.user_name(uid)) {
                 f.write_fmt(format_args!("{:28}{} / {}\n", "  User:", uid, user_name))?;
             } else {
                 f.write_fmt(format_args!("{:28}{}\n", "  User:", uid))?;
             }
 
             let gid = l.st_gid;
-            if let Some(group_name) = self.distro.and_then(|d| d.group_name(gid)) {
+            if let Some(group_name) = distro.and_then(|d| d.group_name(gid)) {
                 f.write_fmt(format_args!("{:28}{} / {}\n", "  Group:", gid, group_name))?;
             } else {
                 f.write_fmt(format_args!("{:28}{}\n", "  Group:", l.st_gid))?;
@@ -106,32 +127,12 @@ impl<'a, 'd> Display for LxfsParsed<'a, 'd> {
         }
 
         if let Some(lxxattr) = &self.lxxattr {
-            f.write_str("Linux extended attributes(LXXATTR):\n")?;
-            for l in &lxxattr.entries {
+            f.write("Linux extended attributes(LXXATTR):\n".as_bytes())?;
+            for l in lxxattr {
                 f.write_fmt(format_args!("  {:26}{}\n", l.name_display(), l.value_display()))?;
             }
         }
         Ok(())
-    }
-}
-
-const MINORBITS: usize = 20;
-const MINORMASK: u32 = (1u32 << MINORBITS) - 1;
-
-const fn dev_major(dev: u32) -> u32 {
-    dev >> MINORBITS
-}
-const fn dev_minor(dev: u32) -> u32 {
-    dev & MINORMASK
-}
-pub const fn make_dev(ma: u32, mi: u32) -> u32 {
-    (ma << MINORBITS) | mi
-}
-
-impl<'a, 'd> WslFileAttributes<'a> for LxfsParsed<'a, 'd> {
-    fn maybe(&self) -> bool {
-        self.lxattrb.is_some() ||
-        self.lxxattr.is_some()
     }
 
     fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>)-> Self {
@@ -221,11 +222,6 @@ impl<'a, 'd> WslFileAttributes<'a> for LxfsParsed<'a, 'd> {
     }
 }
 
-#[derive(Default)]
-pub struct LxxattrParsed<'a> {
-    entries: Vec<LxxattrEntry<'a>>,
-}
-
 pub struct LxxattrEntry<'a> {
     pub name: Cow<'a, [u8]>,
     pub value: Cow<'a, [u8]>,
@@ -295,7 +291,7 @@ struct LxxattrRaw {
     entries: [LxxattrEntryRaw; 1],
 }
 
-pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> LxxattrParsed<'a> {
+pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> Vec<LxxattrEntry<'a>> {
     let buf = buf.as_ref();
 
     let mut entries = vec![];
@@ -333,9 +329,7 @@ pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> LxxattrParsed<'a> {
         ea_ptr = ea_ptr.add(pea.next_entry_offset as usize);
     }
     
-    LxxattrParsed {
-        entries,
-    }
+    entries
 }
 
 

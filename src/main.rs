@@ -138,7 +138,7 @@ fn main() {
                         return;
                     }
                 } else if let Some(path) = path {
-                    open_to_view(ArgsView { path, distro: None }, |mut wsl_file, wslfs, lxfs| {
+                    open_to_view(ArgsView { path, distro: None }, |mut wsl_file, _distro, wslfs, lxfs| {
                         downgrade(&mut wsl_file, &wslfs, &lxfs);
                     });
                 }
@@ -158,14 +158,14 @@ fn main() {
     }
 }
 
-fn open_to_view(args: ArgsView, f: impl FnOnce(WslFile, WslfsParsed, LxfsParsed) -> ()) {
+fn open_to_view(args: ArgsView, f: impl FnOnce(WslFile, Option<Distro>, WslfsParsed, LxfsParsed) -> ()) {
     let distro = try_load_distro(args.distro.as_ref(), Some(&args.path));
 
     if let Some(wsl_file) = load_wsl_file(&args.path, distro.as_ref()) {
         let ea_buffer = wsl_file.read_ea().unwrap_or(None);
 
         if ea_buffer.is_none() {
-            println!("no EAs exist");
+            println!("no EAs exists");
         }
         
         let ea_parsed = ea_buffer.as_ref()
@@ -173,34 +173,33 @@ fn open_to_view(args: ArgsView, f: impl FnOnce(WslFile, WslfsParsed, LxfsParsed)
             ea_parse::parse_ea(&ea_buffer)
         });
 
-        let mut wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
-        wslfs.distro = distro.as_ref();
+        let wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
     
-        let mut lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
-        lxfs.distro = distro.as_ref();
+        let lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
 
-        f(wsl_file, wslfs, lxfs)
+        f(wsl_file, distro, wslfs, lxfs)
     } else {
         println!("[ERROR] load file failed");
     }
 }
 
 fn view(args_view: ArgsView) {
-    open_to_view(args_view, |wsl_file, wslfs, lxfs| {        
+    open_to_view(args_view, |wsl_file, distro, wslfs, lxfs| {        
         print_file_time(wsl_file.file_handle);
-        println!("{wslfs}");
-        println!("{lxfs}");
+
+        wslfs.fmt(&mut std::io::stdout().lock(), distro.as_ref()).unwrap();
+        lxfs.fmt(&mut std::io::stdout().lock(), distro.as_ref()).unwrap();
     });
 }
 
-fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, FsType, WslfsParsed, LxfsParsed) -> ()) {
+fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, FsType, Option<Distro>, WslfsParsed, LxfsParsed) -> ()) {
     let distro = try_load_distro(args.distro.as_ref(), Some(&args.path));
 
     if let Some(wsl_file) = load_wsl_file(&args.path, distro.as_ref()) {
         let ea_buffer = wsl_file.read_ea().unwrap_or(None);
 
         if ea_buffer.is_none() {
-            println!("no EAs exist");
+            println!("no EAs exists");
         }
         
         let ea_parsed = ea_buffer.as_ref()
@@ -208,11 +207,9 @@ fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, FsType, WslfsParsed,
             ea_parse::parse_ea(&ea_buffer)
         });
 
-        let mut wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
-        wslfs.distro = distro.as_ref();
+        let wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
     
-        let mut lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
-        lxfs.distro = distro.as_ref();
+        let lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
 
         let fs_type = if let Some(fs_type) = args.fs_type {
             println!("use fs_type: {:?} from arg --fs_type", fs_type);
@@ -233,26 +230,26 @@ fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, FsType, WslfsParsed,
             return;
         };
 
-        f(wsl_file, fs_type, wslfs, lxfs)
+        f(wsl_file, fs_type, distro, wslfs, lxfs)
     } else {
         println!("[ERROR] load file failed");
     }
 }
 
 fn chown(args: ArgsChange, user: String) {
-    open_to_change(args, |wsl_file, fs_type, wslfs, lxfs| {
+    open_to_change(args, |wsl_file, fs_type, distro, wslfs, lxfs| {
 
     });
 }
 
 fn chgrp(args: ArgsChange, group: String) {
-    open_to_change(args, |wsl_file, fs_type, wslfs, lxfs| {
+    open_to_change(args, |wsl_file, fs_type, distro, wslfs, lxfs| {
 
     });
 }
 
 fn chmod(args: ArgsChange, modes: String) {
-    open_to_change(args, |wsl_file, fs_type, wslfs, lxfs| {
+    open_to_change(args, |wsl_file, fs_type, distro, wslfs, lxfs| {
         if let Some(mode) = wslfs.get_mode() {
             if let Ok(newmode) = chmod_all(mode, &modes) {
                 println!("WslFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));

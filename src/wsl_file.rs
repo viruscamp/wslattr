@@ -22,6 +22,8 @@ use crate::ntfs_io::{error_msg_ntdll, read_ea_all};
 pub trait WslFileAttributes<'a> : Sized {
     fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self;
 
+    fn fmt(&self, f: &mut dyn std::io::Write, distro: Option<&crate::distro::Distro>) -> std::io::Result<()>;
+
     fn maybe(&self) -> bool;
 
     fn get_uid(&self) -> Option<u32>;

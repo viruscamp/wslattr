@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::fmt::Display;
 use std::mem::{offset_of, transmute};
 use std::io::Result;
 
@@ -20,7 +19,7 @@ pub const LXDEV: &'static str = "$LXDEV";
 pub const LX_DOT: &'static str = "LX.";
 
 #[derive(Default)]
-pub struct WslfsParsed<'a, 'd> {
+pub struct WslfsParsed<'a> {
     pub lxuid: Option<Cow<'a, u32>>,
     pub lxgid: Option<Cow<'a, u32>>,
     pub lxmod: Option<Cow<'a, u32>>,
@@ -31,8 +30,6 @@ pub struct WslfsParsed<'a, 'd> {
     pub reparse_tag: Option<StModeType>,
 
     pub symlink: Option<String>,
-
-    pub distro: Option<&'d Distro>,
 }
 
 pub struct LxDotAttr<Bytes: AsRef<[u8]>>(EaEntry<Bytes>);
@@ -74,8 +71,17 @@ impl<Bytes: AsRef<[u8]>> LxDotAttr<Bytes> {
     }
 }
 
-impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
+    fn maybe(&self) -> bool {
+        self.lxuid.is_some() ||
+        self.lxgid.is_some() ||
+        self.lxmod.is_some() ||
+        self.lxdev.is_some() ||
+        self.reparse_tag.is_some() ||
+        !self.lx_dot_ea.is_empty()
+    }
+
+    fn fmt(&self, f: &mut dyn std::io::Write, distro: Option<&Distro>) -> std::io::Result<()> {
         //Symlink:                   -> target
         //$LXUID:                    Uid: 0 / user1
         //$LXGID:                    Gid: 0
@@ -96,7 +102,7 @@ impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
 
         if let Some(l) = &self.lxuid {
             let uid: u32 = **l;
-            if let Some(user_name) = self.distro.and_then(|d| d.user_name(uid)) {
+            if let Some(user_name) = distro.and_then(|d| d.user_name(uid)) {
                 f.write_fmt(format_args!("{:28}Uid: {} / {}\n", "$LXUID:", uid, user_name))?;
             } else {
                 f.write_fmt(format_args!("{:28}Uid: {}\n", "$LXUID:", uid))?;
@@ -104,7 +110,7 @@ impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
         }
         if let Some(l) = &self.lxgid {
             let gid: u32 = **l;
-            if let Some(group_name) = self.distro.and_then(|d| d.group_name(gid)) {
+            if let Some(group_name) = distro.and_then(|d| d.group_name(gid)) {
                 f.write_fmt(format_args!("{:28}Gid: {} / {}\n", "$LXGID:", gid, group_name))?;
             } else {
                 f.write_fmt(format_args!("{:28}Gid: {}\n", "$LXGID:", gid))?;
@@ -120,23 +126,12 @@ impl<'a, 'd> Display for WslfsParsed<'a, 'd> {
         }
 
         if self.lx_dot_ea.len() > 0 {
-            f.write_str("Linux extended attributes(LX.*):\n")?;
+            f.write("Linux extended attributes(LX.*):\n".as_bytes())?;
             for l in &self.lx_dot_ea {
                 f.write_fmt(format_args!("  {:26}{}\n", l.name_display(), l.value_display()))?;
             }
         }
         Ok(())
-    }
-}
-
-impl<'a, 'd> WslFileAttributes<'a> for WslfsParsed<'a, 'd> {
-    fn maybe(&self) -> bool {
-        self.lxuid.is_some() ||
-        self.lxgid.is_some() ||
-        self.lxmod.is_some() ||
-        self.lxdev.is_some() ||
-        self.reparse_tag.is_some() ||
-        !self.lx_dot_ea.is_empty()
     }
 
     fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self {
