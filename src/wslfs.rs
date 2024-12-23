@@ -4,7 +4,7 @@ use std::io::Result;
 
 use windows::Win32::Foundation::HANDLE;
 
-use crate::distro::Distro;
+use crate::distro::{Distro, FsType};
 use crate::ea_parse::{EaEntry, EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
 use crate::posix::{lsperms, StModeType};
@@ -17,6 +17,9 @@ pub const LXDEV: &'static str = "$LXDEV";
 
 /// prefix of linux extended file attribute saved as ntfs ea
 pub const LX_DOT: &'static str = "LX.";
+
+// value prefix of linux extended file attribute saved as ntfs ea
+pub const LXEA: &'static [u8] = "lxea".as_bytes();
 
 #[derive(Default)]
 pub struct WslfsParsed<'a> {
@@ -35,6 +38,20 @@ pub struct WslfsParsed<'a> {
 pub struct LxDotAttr<Bytes: AsRef<[u8]>>(EaEntry<Bytes>);
 
 pub type LxDotAttrCow<'a> = LxDotAttr<Cow<'a, [u8]>>;
+
+impl<'a> LxDotAttrCow<'a> {
+    pub fn new_owned(name: &str, value: &[u8]) -> Self {
+        let mut name_buf = Vec::with_capacity(LX_DOT.as_bytes().len() + name.as_bytes().len());
+        name_buf.append(&mut LX_DOT.as_bytes().to_vec());
+        name_buf.append(&mut name.as_bytes().to_vec());
+
+        let mut value_buf = Vec::with_capacity(LXEA.len() + value.len());
+        value_buf.append(&mut LXEA.to_vec());
+        value_buf.append(&mut value.to_vec());
+
+        LxDotAttr(EaEntry { flags: 0, name: name_buf.into(), value: value_buf.into() })
+    }
+}
 
 impl<Bytes: AsRef<[u8]>> LxDotAttr<Bytes> {
     pub fn name_ea<'x>(&self) -> &[u8] {
@@ -71,7 +88,46 @@ impl<Bytes: AsRef<[u8]>> LxDotAttr<Bytes> {
     }
 }
 
+impl<'a> WslfsParsed<'a> {
+    pub fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self {
+        let mut p = Self::default();
+
+        p.reparse_tag = wsl_file.reparse_tag.map(WslfsReparseTag::from_tag_id);
+        if wsl_file.reparse_tag == Some(IO_REPARSE_TAG_LX_SYMLINK) {
+            p.symlink = read_lx_symlink(wsl_file.file_handle).ok();
+        }
+
+        p.lx_dot_ea = vec![];
+
+        if let Some(ea_parsed) = ea_parsed {
+            for ea in ea_parsed {
+                if ea.name == LXUID.as_bytes() {
+                    p.lxuid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
+                } else if ea.name == LXGID.as_bytes() {
+                    p.lxgid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
+                } else if ea.name == LXMOD.as_bytes() {
+                    p.lxmod = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
+                } else if ea.name == LXDEV.as_bytes() {
+                    p.lxdev = Some(Cow::Owned(ea.get_ea::<Lxdev>().to_owned()));
+                } else if ea.name.starts_with(LX_DOT.as_bytes()) {
+                    p.lx_dot_ea.push(LxDotAttr(EaEntryCow {
+                        flags: ea.flags,
+                        name: ea.name.to_owned().into(),
+                        value: ea.value.to_owned().into(),
+                    }));
+                }
+            }
+        }
+
+        p
+    }
+}
+
 impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
+    fn fs_type(&self) -> FsType {
+        FsType::Wslfs
+    }
+
     fn maybe(&self) -> bool {
         self.lxuid.is_some() ||
         self.lxgid.is_some() ||
@@ -134,39 +190,6 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
         Ok(())
     }
 
-    fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self {
-        let mut p = Self::default();
-
-        p.reparse_tag = wsl_file.reparse_tag.map(WslfsReparseTag::from_tag_id);
-        if wsl_file.reparse_tag == Some(IO_REPARSE_TAG_LX_SYMLINK) {
-            p.symlink = read_lx_symlink(wsl_file.file_handle).ok();
-        }
-
-        p.lx_dot_ea = vec![];
-
-        if let Some(ea_parsed) = ea_parsed {
-            for ea in ea_parsed {
-                if ea.name == LXUID.as_bytes() {
-                    p.lxuid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-                } else if ea.name == LXGID.as_bytes() {
-                    p.lxgid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-                } else if ea.name == LXMOD.as_bytes() {
-                    p.lxmod = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-                } else if ea.name == LXDEV.as_bytes() {
-                    p.lxdev = Some(Cow::Owned(ea.get_ea::<Lxdev>().to_owned()));
-                } else if ea.name.starts_with(LX_DOT.as_bytes()) {
-                    p.lx_dot_ea.push(LxDotAttr(EaEntryCow {
-                        flags: ea.flags,
-                        name: ea.name.to_owned().into(),
-                        value: ea.value.to_owned().into(),
-                    }));
-                }
-            }
-        }
-
-        p
-    }
-
     fn get_uid(&self) -> Option<u32> {
         self.lxuid.as_ref().map(|l| *l.as_ref())
     }
@@ -209,6 +232,43 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
         let mut lxdev = self.lxdev.take().unwrap_or_default();
         lxdev.to_mut().minor = dev_minor;
         self.lxdev = Some(lxdev);
+    }
+
+    fn set_attr(&mut self, name: &str, value: &[u8]) {
+        if let Some(x) = self.lx_dot_ea.iter_mut().filter(|x| x.name_display() == name).next() {
+            x.0.value = Cow::Owned(value.to_owned());
+        } else {
+            self.lx_dot_ea.push(LxDotAttr::new_owned(name, value));
+        }
+    }
+
+    fn save(&mut self, wsl_file: &mut WslFile) -> std::io::Result<()> {
+        use crate::ea_parse::{EaOut, get_buffer};
+        use crate::ntfs_io::write_ea;
+
+        let mut ea_out = EaOut::default();
+
+        // Some -> None cannot be processed
+        if let Some(Cow::Owned(ref x)) = self.lxuid {
+            ea_out.add(LXUID.as_bytes(), get_buffer(x));
+        }
+        if let Some(Cow::Owned(ref x)) = self.lxgid {
+            ea_out.add(LXGID.as_bytes(), get_buffer(x));
+        }
+        if let Some(Cow::Owned(ref x)) = self.lxmod {
+            ea_out.add(LXMOD.as_bytes(), get_buffer(x));
+        }
+        if let Some(Cow::Owned(ref x)) = self.lxdev {
+            ea_out.add(LXDEV.as_bytes(), get_buffer(x));
+        }
+
+        for lxea in &self.lx_dot_ea {
+            if let Cow::Owned(ref x) = lxea.0.value {
+                ea_out.add_entry(&lxea.0);
+            }
+        }
+
+        unsafe { write_ea(wsl_file.file_handle, &ea_out.buff) }
     }
 }
 

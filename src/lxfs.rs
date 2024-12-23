@@ -1,8 +1,10 @@
-use std::borrow::Cow;
+use std::borrow::{BorrowMut, Cow};
 use std::mem::{offset_of, transmute};
 use std::ptr::{addr_of, slice_from_raw_parts};
 
-use crate::distro::Distro;
+use windows::core::Owned;
+
+use crate::distro::{Distro, FsType};
 use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
 use crate::posix::{lsperms, StModeType};
 use crate::ntfs_io::read_data;
@@ -70,7 +72,39 @@ pub const fn make_dev(ma: u32, mi: u32) -> u32 {
     (ma << MINORBITS) | mi
 }
 
-impl<'a> WslFileAttributes<'a> for LxfsParsed<'a,> {
+impl<'a> LxfsParsed<'a> {
+    pub fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>)-> Self {
+        let mut p = Self::default();
+
+        if let Some(ea_parsed) = ea_parsed {
+            for EaEntry { name, value, flags: _ } in ea_parsed {
+                let name = name.as_ref();
+                if name == LXATTRB.as_bytes() {
+                    p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));
+                    
+                    if let Some(mode) = p.get_mode() {
+                        if StModeType::from_mode(mode) == StModeType::LNK {
+                            let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
+                            let symlink = String::from_utf8(buf).unwrap();
+                            p.symlink = Some(symlink);
+                        }
+                    }
+                } else if name == LXXATTR.as_bytes() {
+                    let lxxattr_parsed = unsafe { parse_lxxattr(value.as_ref()) };
+                    p.lxxattr = Some(lxxattr_parsed);
+                }
+            }
+        }
+
+        p
+    }
+}
+
+impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
+    fn fs_type(&self) -> FsType {
+        FsType::Lxfs
+    }
+
     fn maybe(&self) -> bool {
         self.lxattrb.is_some() ||
         self.lxxattr.is_some()
@@ -134,40 +168,6 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a,> {
         }
         Ok(())
     }
-
-    fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>)-> Self {
-        let mut p = Self::default();
-
-        if let Some(ea_parsed) = ea_parsed {
-            for EaEntry { name, value, flags: _ } in ea_parsed {
-                let name = name.as_ref();
-                if name == LXATTRB.as_bytes() {
-                    p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));
-                    
-                    if let Some(mode) = p.get_mode() {
-                        if StModeType::from_mode(mode) == StModeType::LNK {
-                            let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
-                            let symlink = String::from_utf8(buf).unwrap();
-                            p.symlink = Some(symlink);
-                        }
-                    }
-                } else if name == LXXATTR.as_bytes() {
-                    let lxxattr_parsed = unsafe { parse_lxxattr(value.as_ref()) };
-                    p.lxxattr = Some(lxxattr_parsed);
-
-                    /*
-                    let mut out = LxxattrOut::default();
-                    for e in &p.lxxattr.as_ref().unwrap().entries {
-                        out.add(e);
-                    }
-                    assert_eq!(value, &out.buff);
-                    */
-                }
-            }
-        }
-
-        p
-    }
     
     fn get_uid(&self) -> Option<u32> {
         self.lxattrb.as_ref().map(|l| l.st_uid)
@@ -219,6 +219,39 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a,> {
         let st_rdev = lxattrb.st_rdev;
         lxattrb.to_mut().st_rdev = make_dev(dev_major(st_rdev), mi);
         self.lxattrb = Some(lxattrb);
+    }
+
+    fn set_attr(&mut self, name: &str, value: &[u8]) {
+        let mut lxxattr = self.lxxattr.take().unwrap_or_default();
+        if let Some(x) = lxxattr.iter_mut().filter(|x| x.name.as_ref() == name.as_bytes()).next() {
+            x.value = Cow::Owned(value.to_owned());
+        } else {
+            let name = Cow::Owned(name.as_bytes().to_owned());
+            let value = Cow::Owned(value.to_owned());
+            lxxattr.push(LxxattrEntry { name, value });
+        }
+        self.lxxattr = Some(lxxattr);
+    }
+
+    fn save(&mut self, wsl_file: &mut WslFile) -> std::io::Result<()>  {
+        use crate::ea_parse::{EaOut, get_buffer};
+        use crate::ntfs_io::write_ea;
+
+        let mut ea_out = EaOut::default();
+
+        if let Some(Cow::Owned(ref x)) = self.lxattrb {
+            ea_out.add(LXATTRB.as_bytes(), get_buffer(x));
+        }
+
+        if let Some(ref x) = self.lxxattr {            
+            let mut lxxattr_out = LxxattrOut::default();
+            for attr in x {
+                lxxattr_out.add(&attr.name, &attr.value);
+            }
+            ea_out.add(LXXATTR.as_bytes(), &lxxattr_out.buff);
+        }
+
+        unsafe { write_ea(wsl_file.file_handle, &ea_out.buff) }
     }
 }
 
@@ -339,13 +372,21 @@ pub struct LxxattrOut {
 
     // pos, size
     last_attr_info: Option<(usize, usize)>,
+
+    count: usize,
 }
 
 impl LxxattrOut {
+    pub fn count(&self) -> usize {
+        self.count
+    }
     pub fn add(&mut self, name: &[u8], value: &[u8]) {
         if self.buff.is_empty() {
             // TODO how about big endian?
             self.buff = vec![0, 0, 1, 0];
+        }
+        if value.is_empty() {
+            return;
         }
         unsafe {
             let this_size = LxxattrEntryRaw::size_inner(name.len() as u8, value.len() as u16);
@@ -373,6 +414,7 @@ impl LxxattrOut {
             std::ptr::copy_nonoverlapping(value.as_ptr(), pvalue, ea.value_length as usize);
 
             self.last_attr_info = Some((this_pos, this_size));
+            self.count += 1;
         }
     }
 }

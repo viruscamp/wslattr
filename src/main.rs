@@ -6,7 +6,7 @@ use lxfs::{EaLxattrbV1, LxfsParsed, LxxattrOut, LXATTRB, LXXATTR};
 use ntfs_io::{delete_reparse_point, query_file_basic_infomation, write_data};
 use path_utils::*;
 use distro::{Distro, DistroSource, FsType};
-use posix::{chmod_all, lsperms, StModeType};
+use posix::{chmod_all, lsperms, StModeType, DEFAULT_MODE};
 use time_utils::LxfsTime;
 use windows::Win32::Foundation::HANDLE;
 use wsl_file::{open_handle, WslFile, WslFileAttributes};
@@ -192,10 +192,10 @@ fn view(args_view: ArgsView) {
     });
 }
 
-fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, FsType, Option<Distro>, WslfsParsed, LxfsParsed) -> ()) {
+fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, Option<Distro>, &mut dyn WslFileAttributes ) -> ()) {
     let distro = try_load_distro(args.distro.as_ref(), Some(&args.path));
 
-    if let Some(wsl_file) = load_wsl_file(&args.path, distro.as_ref()) {
+    if let Some(mut wsl_file) = load_wsl_file(&args.path, distro.as_ref()) {
         let ea_buffer = wsl_file.read_ea().unwrap_or(None);
 
         if ea_buffer.is_none() {
@@ -207,63 +207,108 @@ fn open_to_change(args: ArgsChange, f: impl FnOnce(WslFile, FsType, Option<Distr
             ea_parse::parse_ea(&ea_buffer)
         });
 
-        let wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
+        let mut wslfs = wslfs::WslfsParsed::load(&wsl_file, &ea_parsed);
     
-        let lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
+        let mut lxfs = lxfs::LxfsParsed::load(&wsl_file, &ea_parsed);
 
-        let fs_type = if let Some(fs_type) = args.fs_type {
+        let wsl_attrs: &mut dyn WslFileAttributes = if let Some(fs_type) = args.fs_type {
             println!("use fs_type: {:?} from arg --fs_type", fs_type);
-            fs_type
+            match fs_type {
+                FsType::Lxfs => &mut lxfs,
+                FsType::Wslfs => &mut wslfs,
+            }
         } else if let Some(d) = distro.as_ref().filter(|d| d.source == DistroSource::Arg && d.fs_type.is_some()) {
             let fs_type = d.fs_type.unwrap();
             println!("use fs_type: {:?} from arg --distro {}", fs_type, &d.name);
-            fs_type
+            match fs_type {
+                FsType::Lxfs => &mut lxfs,
+                FsType::Wslfs => &mut wslfs,
+            }
         } else if wslfs.maybe() && lxfs.maybe() {
             println!("[ERROR] cannot determine fs_type, cause both wslfs and lxfs metadata exist");
             return;
         } else if wslfs.maybe() {
-            FsType::Wslfs
+            &mut wslfs
         } else if lxfs.maybe() {
-            FsType::Lxfs
+            &mut lxfs
         } else {
             println!("[ERROR] cannot determine fs_type, cause no wslfs nor lxfs metadata exists");
             return;
         };
 
-        f(wsl_file, fs_type, distro, wslfs, lxfs)
+        wsl_file.reopen_to_write().unwrap();
+        f(wsl_file, distro, wsl_attrs)
     } else {
         println!("[ERROR] load file failed");
     }
 }
 
 fn chown(args: ArgsChange, user: String) {
-    open_to_change(args, |wsl_file, fs_type, distro, wslfs, lxfs| {
+    open_to_change(args, |mut wsl_file, distro, wsl_attrs| {
+        let uid = if let Ok(uid) = u32::from_str_radix(&user, 10) {
+            uid
+        } else if let Some(distro) = &distro {
+            if let Some(uid) = distro.uid(&user) {
+                uid
+            } else {
+                println!("[ERROR] no user: {} in distro: {}", &user, &distro.name);
+                return;
+            }
+        } else {
+            println!("[ERROR] user: {} without -d <distro>", &user);
+            return;
+        };
 
+        let olduid = wsl_attrs.get_uid();
+
+        wsl_attrs.set_uid(uid);
+        if let Err(ex) = wsl_attrs.save(&mut wsl_file) {
+            println!("[ERROR] chown for {:?} {:?} --> {}, error: {ex:?}", wsl_attrs.fs_type(), olduid, uid);
+        } else {
+            println!("chown for {:?} {:?} --> {}", wsl_attrs.fs_type(), olduid, uid);
+        }
     });
 }
 
 fn chgrp(args: ArgsChange, group: String) {
-    open_to_change(args, |wsl_file, fs_type, distro, wslfs, lxfs| {
+    open_to_change(args, |mut wsl_file, distro, wsl_attrs| {
+        let gid = if let Ok(gid) = u32::from_str_radix(&group, 10) {
+            gid
+        } else if let Some(distro) = &distro {
+            if let Some(gid) = distro.gid(&group) {
+                gid
+            } else {
+                println!("[ERROR] no group: {} in distro: {}", &group, &distro.name);
+                return;
+            }
+        } else {
+            println!("[ERROR] group: {} without -d <distro>", &group);
+            return;
+        };
 
+        let oldgid = wsl_attrs.get_gid();
+
+        wsl_attrs.set_gid(gid);
+        if let Err(ex) = wsl_attrs.save(&mut wsl_file) {
+            println!("[ERROR] chgrp for {:?} {:?} --> {}, error: {ex:?}", wsl_attrs.fs_type(), oldgid, gid);
+        } else {
+            println!("chgrp for {:?} {:?} --> {}", wsl_attrs.fs_type(), oldgid, gid);
+        }
     });
 }
 
 fn chmod(args: ArgsChange, modes: String) {
-    open_to_change(args, |wsl_file, fs_type, distro, wslfs, lxfs| {
-        if let Some(mode) = wslfs.get_mode() {
-            if let Ok(newmode) = chmod_all(mode, &modes) {
-                println!("WslFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
+    open_to_change(args, |mut wsl_file, _distro, wsl_attrs| {
+        let mode = wsl_attrs.get_mode().unwrap_or(DEFAULT_MODE);
+        if let Ok(newmode) = chmod_all(mode, &modes) {
+            wsl_attrs.set_mode(newmode);
+            if let Err(ex) = wsl_attrs.save(&mut wsl_file) {
+                println!("[ERROR] chmod for {:?}: {:06o} / {} --> {:06o} / {} {ex:?}", wsl_attrs.fs_type(), mode, lsperms(mode), newmode, lsperms(newmode));
             } else {
-                println!("[ERROR]invalid mode: {}", modes);
+                println!("chmod for {:?}: {:06o} / {} --> {:06o} / {}", wsl_attrs.fs_type(), mode, lsperms(mode), newmode, lsperms(newmode));
             }
-        }
-    
-        if let Some(mode) = lxfs.get_mode() {
-            if let Ok(newmode) = chmod_all(mode, &modes) {
-                println!("LxFS: {:06o} / {} --> {:06o} / {}", mode, lsperms(mode), newmode, lsperms(newmode));
-            } else {
-                println!("[ERROR]invalid mode: {}", modes);
-            }
+        } else {
+            println!("[ERROR] invalid mode: {}", modes);
         }
     });
 }
@@ -274,7 +319,7 @@ fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u
 
         let mut ea_out = EaOut::default();
         for ea in ea_parsed {
-            ea_out.add(&ea);
+            ea_out.add_entry(&ea);
         }
 
         // read ea and construct a new buffer, they should be same
@@ -287,11 +332,7 @@ fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u
 fn set_ea(file_handle: HANDLE, name: &[u8], value: Option<&[u8]>) {
     // add, change, delete
     let mut ea_out = EaOut::default();
-    ea_out.add(&EaEntryRaw {
-        flags: 0,
-        name: name,
-        value: value.unwrap_or(&[0;0]),
-    });
+    ea_out.add(name, value.unwrap_or(&[0;0]));
     unsafe {
         let _ = ntfs_io::write_ea(file_handle, &ea_out.buff);
     }
@@ -489,11 +530,7 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
 			std::mem::size_of_val(&lxattrb)
 		)
 	};
-    ea_out.add(&EaEntryRaw {
-        flags: 0,
-        name: LXATTRB.as_bytes(),
-        value: lxattrb_bytes,
-    });
+    ea_out.add(LXATTRB.as_bytes(), lxattrb_bytes);
 
     // 2. for all files, set LXXATTR, from LX.*
     let mut lxxattr_out = LxxattrOut::default();
@@ -501,19 +538,11 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
         ea_to_remove.push(&dot_ea.name_ea());
         lxxattr_out.add(&dot_ea.name(), &dot_ea.value());
     }
-    ea_out.add(&EaEntryRaw {
-        flags: 0,
-        name: LXXATTR.as_bytes(),
-        value: &lxxattr_out.buff,
-    });
+    ea_out.add(LXXATTR.as_bytes(), &lxxattr_out.buff);
 
     // write EA
     for ea in ea_to_remove {
-        ea_out.add(&EaEntryRaw {
-            flags: 0,
-            name: ea,
-            value: "".as_bytes(),
-        });
+        ea_out.add(ea,"".as_bytes());
     }
     unsafe {
         let _ = wsl_file.reopen_to_write();

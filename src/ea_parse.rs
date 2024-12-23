@@ -23,6 +23,11 @@ pub fn force_cast<T: Sized>(buf: &[u8]) -> &T {
     unsafe { &* (data as *const T) }
 }
 
+pub fn get_buffer<T: Sized>(t: &T) -> &[u8] {
+    let pt = t as *const T as *const u8;
+    unsafe { core::slice::from_raw_parts(pt, size_of::<T>()) }
+}
+
 pub type EaEntryRaw<'a> = EaEntry<&'a [u8]>;
 
 impl<'a> EaEntryRaw<'a> {
@@ -37,7 +42,7 @@ pub type EaEntryOwned = EaEntry<[u8]>;
 
 /// 12, aligned size, could not be used
 #[allow(dead_code)] 
-const EA_BASE_SIZE_ALIGNED: usize = size_of::<FILE_FULL_EA_INFORMATION>();
+const EA_BASE_SIZE_RAW_ALIGNED: usize = size_of::<FILE_FULL_EA_INFORMATION>();
 /// 9, include NULL at end, use this
 const EA_BASE_SIZE_RAW: usize = size_of::<u32>() + size_of::<u8>() + size_of::<u8>() + size_of::<u16>() + size_of::<u8>();
 const EA_ALIGN: usize = size_of::<u32>();
@@ -131,10 +136,20 @@ pub struct EaOut {
 
     // index, size
     last_ea_info: Option<(usize, usize)>,
+
+    count: usize,
 }
 
 impl EaOut {
-    pub fn add<Bytes: AsRef<[u8]>>(&mut self, entry: &EaEntry<Bytes>) {
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    pub fn add(&mut self, name: &[u8], value: &[u8]) {
+        self.add_entry(&EaEntry { flags: 0, name, value });
+    }
+
+    pub fn add_entry<Bytes: AsRef<[u8]>>(&mut self, entry: &EaEntry<Bytes>) {
         unsafe {
             let this_size = entry.size();
             self.buff.resize(self.buff.len() + entry.size(), 0);
@@ -162,6 +177,7 @@ impl EaOut {
             std::ptr::copy_nonoverlapping(entry.value.as_ref().as_ptr(), pvalue, ea.EaValueLength as usize);
 
             self.last_ea_info = Some((this_index, this_size));
+            self.count += 1;
         }
     }
 }

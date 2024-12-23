@@ -16,11 +16,11 @@ use windows::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONAT
 
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
-use crate::ea_parse::EaEntryRaw;
+use crate::distro::FsType;
 use crate::ntfs_io::{error_msg_ntdll, read_ea_all};
 
-pub trait WslFileAttributes<'a> : Sized {
-    fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self;
+pub trait WslFileAttributes<'a> {
+    fn fs_type(&self) -> FsType;
 
     fn fmt(&self, f: &mut dyn std::io::Write, distro: Option<&crate::distro::Distro>) -> std::io::Result<()>;
 
@@ -37,6 +37,10 @@ pub trait WslFileAttributes<'a> : Sized {
     fn set_mode(&mut self, mode: u32);
     fn set_dev_major(&mut self, dev_major: u32);
     fn set_dev_minor(&mut self, dev_minor: u32);
+
+    fn set_attr(&mut self, name: &str, value: &[u8]);
+
+    fn save(&mut self, wsl_file: &mut WslFile) -> std::io::Result<()> ;
 }
 
 #[derive(Default)]

@@ -1,6 +1,5 @@
 use std::{fs::File, io::{BufRead, BufReader}, path::{Path, PathBuf}};
 
-
 pub const ST_MODE_TYPE_FIFO: u32 = 0o_0010000;
 pub const ST_MODE_TYPE_CHR:  u32 = 0o_0020000;
 pub const ST_MODE_TYPE_DIR:  u32 = 0o_0040000;
@@ -10,6 +9,8 @@ pub const ST_MODE_TYPE_LNK:  u32 = 0o_0120000;
 pub const ST_MODE_TYPE_SOCK: u32 = 0o_0140000;
 /// type of file mask for st_mode 
 pub const ST_MODE_TYPE_MASK: u32 = 0o_0170000;
+
+pub const DEFAULT_MODE: u32 = 0o_0170644;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
