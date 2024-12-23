@@ -268,7 +268,7 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
             }
         }
 
-        unsafe { write_ea(wsl_file.file_handle, &ea_out.buff) }
+        unsafe { write_ea(wsl_file.file_handle, &ea_out.buffer) }
     }
 }
 

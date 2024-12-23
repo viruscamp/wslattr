@@ -67,9 +67,9 @@ fn test_ea_entry_size_inner() {
     assert_eq!(ea_entry_size_inner(2, 3), 16); // 14
 }
 
-pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntry<&[u8]>> {
+pub fn parse_ea_to_iter(buffer: &[u8]) -> impl Iterator<Item = EaEntry<&[u8]>> {
     struct Iter<'a> {
-        buf: &'a [u8],
+        buffer: &'a [u8],
         ea_ptr: *const u8,
     }
 
@@ -83,7 +83,7 @@ pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntry<&[u8]>> {
 
             unsafe {                
                 let ea_ptr = self.ea_ptr;
-                let buf_range = self.buf.as_ptr_range();
+                let buf_range = self.buffer.as_ptr_range();
 
                 // 11 is min actual size of EA that can be set with EaNameLength==1 and EaValueLength==1
                 // but read buf is 12 in length
@@ -117,8 +117,8 @@ pub fn parse_ea_to_iter(buf: &[u8]) -> impl Iterator<Item = EaEntry<&[u8]>> {
     }
 
     Iter {
-        buf,
-        ea_ptr: buf.as_ptr(),
+        buffer,
+        ea_ptr: buffer.as_ptr(),
     }
 }
 
@@ -132,7 +132,7 @@ pub fn parse_ea<'a>(buf: &'a [u8]) -> Vec<EaEntry<&'a [u8]>> {
 
 #[derive(Default)]
 pub struct EaOut {
-    pub buff: Vec<u8>,
+    pub buffer: Vec<u8>,
 
     // index, size
     last_ea_info: Option<(usize, usize)>,
@@ -152,10 +152,10 @@ impl EaOut {
     pub fn add_entry<Bytes: AsRef<[u8]>>(&mut self, entry: &EaEntry<Bytes>) {
         unsafe {
             let this_size = entry.size();
-            self.buff.resize(self.buff.len() + entry.size(), 0);
+            self.buffer.resize(self.buffer.len() + entry.size(), 0);
 
             let this_index = if let Some(last_ea_info) = self.last_ea_info {                
-                let last_ea_ptr = self.buff.as_mut_ptr().add(last_ea_info.0);
+                let last_ea_ptr = self.buffer.as_mut_ptr().add(last_ea_info.0);
                 let last_ea: &mut FILE_FULL_EA_INFORMATION = transmute(last_ea_ptr);
                 last_ea.NextEntryOffset = last_ea_info.1 as u32;
                 last_ea_info.0 + last_ea_info.1
@@ -163,7 +163,7 @@ impl EaOut {
                 0
             };
 
-            let pea: *mut u8 = self.buff.as_mut_ptr().add(this_index);
+            let pea: *mut u8 = self.buffer.as_mut_ptr().add(this_index);
             let ea: &mut FILE_FULL_EA_INFORMATION = transmute(pea);
             ea.NextEntryOffset = 0;
             ea.Flags = 0;

@@ -63,22 +63,32 @@ enum Command {
     Chown {
         /// uid or user name(with valid distro)
         user: String,
-        #[clap(flatten)]
-        
+
+        #[clap(flatten)]        
         args_change: ArgsChange,
     },
     Chgrp {
         /// gid or group name(with valid distro)
         group: String,
-        #[clap(flatten)]
 
+        #[clap(flatten)]
         args_change: ArgsChange,
     },
     Chmod {
         /// posix modes string, "0844", "u+x,g-t"
         modes: String,
-        #[clap(flatten)]
 
+        #[clap(flatten)]
+        args_change: ArgsChange,
+    },
+    SetAttr {
+        #[arg(long, short)]
+        name: String,
+
+        #[arg(long, short)]
+        value: Option<String>,
+
+        #[clap(flatten)]
         args_change: ArgsChange,
     },
     Downgrade {
@@ -108,7 +118,7 @@ fn main() {
     use Command::*;
 
     let args = Args::parse();
-    println!("args: {:?}!", args);
+    //println!("args: {:?}!", args);
 
     if let Some(cmd) = args.command {
         match cmd {
@@ -116,6 +126,7 @@ fn main() {
             Chown { args_change, user } => chown(args_change, user),
             Chgrp { args_change, group } => chgrp(args_change, group),
             Chmod { args_change, modes } => chmod(args_change, modes),
+            SetAttr { args_change, name, value } => set_attr(args_change, name, value),
             Downgrade { path, distro } => {
                 if path.is_some() && distro.is_some() {
                     println!("[ERROR] path and distro args are conflicted");
@@ -154,7 +165,7 @@ fn main() {
         view(args_view);
     } else {
         // fail
-        print!("argument <PATH> or command must be provided")
+        print!("[ERROR] argument <PATH> or command must be provided")
     }
 }
 
@@ -303,12 +314,24 @@ fn chmod(args: ArgsChange, modes: String) {
         if let Ok(newmode) = chmod_all(mode, &modes) {
             wsl_attrs.set_mode(newmode);
             if let Err(ex) = wsl_attrs.save(&mut wsl_file) {
-                println!("[ERROR] chmod for {:?}: {:06o} / {} --> {:06o} / {} {ex:?}", wsl_attrs.fs_type(), mode, lsperms(mode), newmode, lsperms(newmode));
+                println!("[ERROR] chmod for {:?}: {:06o} / {} --> {:06o} / {}, error: {ex:?}", wsl_attrs.fs_type(), mode, lsperms(mode), newmode, lsperms(newmode));
             } else {
                 println!("chmod for {:?}: {:06o} / {} --> {:06o} / {}", wsl_attrs.fs_type(), mode, lsperms(mode), newmode, lsperms(newmode));
             }
         } else {
             println!("[ERROR] invalid mode: {}", modes);
+        }
+    });
+}
+
+fn set_attr(args: ArgsChange, name: String, value: Option<String>) {
+    open_to_change(args, |mut wsl_file, _distro, wsl_attrs| {
+        let value_bytes = value.map_or(vec![], |v| escape_utils::unescape(&v).expect("invalid value"));
+        wsl_attrs.set_attr(&name, &value_bytes);
+        if let Err(ex) = wsl_attrs.save(&mut wsl_file) {
+            println!("[ERROR] set_attr for {:?}, error: {ex:?}", wsl_attrs.fs_type());
+        } else {
+            println!("chmod set_attr {:?}", wsl_attrs.fs_type());
         }
     });
 }
@@ -324,8 +347,8 @@ fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u
 
         // read ea and construct a new buffer, they should be same
 
-        println!("read_ea_len={} out_ea_len={}", ea_buffer.len(), ea_out.buff.len());
-        assert_eq!(ea_buffer, &ea_out.buff);
+        println!("read_ea_len={} out_ea_len={}", ea_buffer.len(), ea_out.buffer.len());
+        assert_eq!(ea_buffer, &ea_out.buffer);
     }
 }
 
@@ -334,7 +357,7 @@ fn set_ea(file_handle: HANDLE, name: &[u8], value: Option<&[u8]>) {
     let mut ea_out = EaOut::default();
     ea_out.add(name, value.unwrap_or(&[0;0]));
     unsafe {
-        let _ = ntfs_io::write_ea(file_handle, &ea_out.buff);
+        let _ = ntfs_io::write_ea(file_handle, &ea_out.buffer);
     }
 }
 
@@ -538,7 +561,7 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
         ea_to_remove.push(&dot_ea.name_ea());
         lxxattr_out.add(&dot_ea.name(), &dot_ea.value());
     }
-    ea_out.add(LXXATTR.as_bytes(), &lxxattr_out.buff);
+    ea_out.add(LXXATTR.as_bytes(), &lxxattr_out.buffer);
 
     // write EA
     for ea in ea_to_remove {
@@ -546,7 +569,7 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
     }
     unsafe {
         let _ = wsl_file.reopen_to_write();
-        let _ = ntfs_io::write_ea(wsl_file.file_handle, &ea_out.buff);
+        let _ = ntfs_io::write_ea(wsl_file.file_handle, &ea_out.buffer);
     }
 
     // 3. special files, remove sparse point

@@ -248,10 +248,10 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
             for attr in x {
                 lxxattr_out.add(&attr.name, &attr.value);
             }
-            ea_out.add(LXXATTR.as_bytes(), &lxxattr_out.buff);
+            ea_out.add(LXXATTR.as_bytes(), &lxxattr_out.buffer);
         }
 
-        unsafe { write_ea(wsl_file.file_handle, &ea_out.buff) }
+        unsafe { write_ea(wsl_file.file_handle, &ea_out.buffer) }
     }
 }
 
@@ -324,15 +324,13 @@ struct LxxattrRaw {
     entries: [LxxattrEntryRaw; 1],
 }
 
-pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> Vec<LxxattrEntry<'a>> {
-    let buf = buf.as_ref();
-
+pub unsafe fn parse_lxxattr<'a>(buffer: &'a [u8]) -> Vec<LxxattrEntry<'a>> {
     let mut entries = vec![];
 
-    assert!(buf.len() >= size_of::<LxxattrRaw>());
+    assert!(buffer.len() >= size_of::<LxxattrRaw>());
 
-    let buf_range = buf.as_ptr_range();
-    let praw: &LxxattrRaw = transmute(buf.as_ptr());
+    let buf_range = buffer.as_ptr_range();
+    let praw: &LxxattrRaw = transmute(buffer.as_ptr());
     assert_eq!(praw.flags, 0);
     assert_eq!(praw.version, 1);
     let mut ea_ptr = addr_of!(praw.entries) as *const u8;
@@ -365,10 +363,9 @@ pub unsafe fn parse_lxxattr<'a>(buf: &'a [u8]) -> Vec<LxxattrEntry<'a>> {
     entries
 }
 
-
 #[derive(Default)]
 pub struct LxxattrOut {
-    pub buff: Vec<u8>,
+    pub buffer: Vec<u8>,
 
     // pos, size
     last_attr_info: Option<(usize, usize)>,
@@ -381,19 +378,19 @@ impl LxxattrOut {
         self.count
     }
     pub fn add(&mut self, name: &[u8], value: &[u8]) {
-        if self.buff.is_empty() {
+        if self.buffer.is_empty() {
             // TODO how about big endian?
-            self.buff = vec![0, 0, 1, 0];
+            self.buffer = vec![0, 0, 1, 0];
         }
         if value.is_empty() {
             return;
         }
         unsafe {
             let this_size = LxxattrEntryRaw::size_inner(name.len() as u8, value.len() as u16);
-            self.buff.resize(self.buff.len() + this_size, 0);
+            self.buffer.resize(self.buffer.len() + this_size, 0);
 
             let this_pos = if let Some(last_attr_info) = self.last_attr_info {                
-                let last_attr_ptr = self.buff.as_mut_ptr().add(last_attr_info.0);
+                let last_attr_ptr = self.buffer.as_mut_ptr().add(last_attr_info.0);
                 let last_attr: &mut LxxattrEntryRaw = transmute(last_attr_ptr);
                 last_attr.next_entry_offset = last_attr_info.1 as u32;
                 last_attr_info.0 + last_attr_info.1
@@ -401,7 +398,7 @@ impl LxxattrOut {
                 4
             };
 
-            let pea: *mut u8 = self.buff.as_mut_ptr().add(this_pos);
+            let pea: *mut u8 = self.buffer.as_mut_ptr().add(this_pos);
             let ea: &mut LxxattrEntryRaw = transmute(pea);
             ea.next_entry_offset = 0;
 
