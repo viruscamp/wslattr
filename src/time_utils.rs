@@ -9,7 +9,7 @@ use time::{format_description, Duration, OffsetDateTime};
 use windows::Win32::Foundation::FILETIME;
 
 /// a 64-bit value representing the number of 100-nanosecond intervals since January 1, 1601 (UTC).
-pub type WinFileTime = i64;
+//pub type WinFileTime = i64;
 
 #[derive(Clone, Copy, Debug)]
 #[derive(PartialEq, Eq, PartialOrd, Ord)]

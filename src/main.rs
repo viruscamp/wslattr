@@ -1,7 +1,9 @@
+#![cfg_attr(debug_assertions, allow(dead_code, unused_imports, unused_variables, unused_mut))]
+
 use std::path::{absolute, Path, PathBuf};
 use clap::{arg, command, Parser, Subcommand};
 
-use ea_parse::{EaEntry, EaEntryRaw, EaOut};
+use ea_parse::{EaEntry, EaOut};
 use lxfs::{EaLxattrbV1, LxfsParsed, LxxattrOut, LXATTRB, LXXATTR};
 use ntfs_io::{delete_reparse_point, query_file_basic_infomation, write_data};
 use path_utils::*;
@@ -139,8 +141,11 @@ fn main() {
                 if let Some(name) = distro {
                     if let Some(mut d) = distro::try_load(&name) {
                         if d.fs_type.is_none() {
-                            // TODO should panic
                             print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+                            return;
+                        }
+                        if d.fs_type == Some(FsType::Lxfs) {
+                            print!("[ERROR] WSL distro: {} is LxFs already", &d.name);
                             return;
                         }
                         downgrade_distro(&mut d);
@@ -491,13 +496,14 @@ fn downgrade_distro(distro: &mut Distro) {
     for entry in walkdir::WalkDir::new(&distro.base_path) {
         if let Ok(entry) = entry {
             if let Ok(_) = downgrade_path(&entry.path().join("rootfs")) {
-                distro.set_fs_type(Some(FsType::Lxfs));
                 println!("downgrade success: {}", entry.path().display());
             } else {
                 println!("downgrade failed: {}", entry.path().display());
             }
         }
     }
+    distro.set_fs_type(Some(FsType::Lxfs));
+    println!("downgrade success, set {} fs_type(Version) to 1", &distro.name);
 }
 
 fn downgrade_path(real_path: &Path) -> std::io::Result<()> {

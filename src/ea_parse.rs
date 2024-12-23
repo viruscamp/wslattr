@@ -38,7 +38,7 @@ impl<'a> EaEntryRaw<'a> {
 
 pub type EaEntryCow<'a> = EaEntry<Cow<'a, [u8]>>;
 
-pub type EaEntryOwned = EaEntry<[u8]>;
+//pub type EaEntryOwned = EaEntry<[u8]>;
 
 /// 12, aligned size, could not be used
 #[allow(dead_code)] 

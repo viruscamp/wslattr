@@ -90,10 +90,8 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
         .filter_map(|k| lxss.open(k).ok())
         .filter(|k| {
             if let Ok(s) = k.get_string(BasePath) {
-                if let Ok(base_path) = PathBuf::from_str(&s) {
-                    if let Ok(base_path) = normalize_path(&base_path) {
-                        return path.starts_with(base_path);
-                    }
+                if let Ok(base_path) = normalize_path(&PathBuf::from(&s)) {
+                    return path.starts_with(base_path);
                 }
             }
             return false;

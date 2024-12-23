@@ -17,7 +17,7 @@ use windows::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONAT
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
 use crate::distro::FsType;
-use crate::ntfs_io::{error_msg_ntdll, read_ea_all};
+use crate::ntfs_io::read_ea_all;
 
 pub trait WslFileAttributes<'a> {
     fn fs_type(&self) -> FsType;

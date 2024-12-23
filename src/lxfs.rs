@@ -1,8 +1,6 @@
-use std::borrow::{BorrowMut, Cow};
+use std::borrow::Cow;
 use std::mem::{offset_of, transmute};
 use std::ptr::{addr_of, slice_from_raw_parts};
-
-use windows::core::Owned;
 
 use crate::distro::{Distro, FsType};
 use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
