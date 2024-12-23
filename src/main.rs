@@ -137,13 +137,13 @@ fn main() {
                     return;
                 }
                 if let Some(name) = distro {
-                    if let Some(d) = distro::try_load(&name) {
+                    if let Some(mut d) = distro::try_load(&name) {
                         if d.fs_type.is_none() {
                             // TODO should panic
                             print!("[ERROR] WSL distro: {} is WSL2", &d.name);
                             return;
                         }
-                        downgrade_distro(&d);
+                        downgrade_distro(&mut d);
                     } else {
                         println!("[ERROR] there must be one of path or distro args");
                         return;
@@ -419,7 +419,7 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
     }
 
     // try load default WSL distro in registry
-    if let Some(d) = distro::default() {
+    if let Some(d) = distro::try_load_from_reg_default() {
         if d.fs_type.is_none() {
             // TODO should panic
             print!("[ERROR] WSL distro: {} is WSL2", &d.name);
@@ -487,10 +487,11 @@ fn load_wsl_file(in_path: &Path, distro: Option<&Distro>) -> Option<WslFile> {
     }
 }
 
-fn downgrade_distro(distro: &Distro) {
+fn downgrade_distro(distro: &mut Distro) {
     for entry in walkdir::WalkDir::new(&distro.base_path) {
         if let Ok(entry) = entry {
             if let Ok(_) = downgrade_path(&entry.path().join("rootfs")) {
+                distro.set_fs_type(Some(FsType::Lxfs));
                 println!("downgrade success: {}", entry.path().display());
             } else {
                 println!("downgrade failed: {}", entry.path().display());

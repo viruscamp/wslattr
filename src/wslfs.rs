@@ -45,11 +45,18 @@ impl<'a> LxDotAttrCow<'a> {
         name_buf.append(&mut LX_DOT.as_bytes().to_vec());
         name_buf.append(&mut name.as_bytes().to_vec());
 
+        LxDotAttr(EaEntry { flags: 0, name: name_buf.into(), value: Self::make_value(value).into() })
+    }
+
+    pub fn set_value(&mut self, value: &[u8]) {
+        self.0.value = Self::make_value(value).into();
+    }
+
+    pub fn make_value(value: &[u8]) -> Vec<u8> {
         let mut value_buf = Vec::with_capacity(LXEA.len() + value.len());
         value_buf.append(&mut LXEA.to_vec());
         value_buf.append(&mut value.to_vec());
-
-        LxDotAttr(EaEntry { flags: 0, name: name_buf.into(), value: value_buf.into() })
+        value_buf
     }
 }
 
@@ -71,14 +78,20 @@ impl<Bytes: AsRef<[u8]>> LxDotAttr<Bytes> {
 
     // remove 'lxea'
     pub fn value(&self) -> &[u8] {
-        &self.0.value.as_ref()[4..]
+        &self.0.value.as_ref()[LXEA.len()..]
     }
 
     pub fn value_display(&self) -> String {
         use std::fmt::Write;
 
-        let bytes = self.value();
-        let mut out = String::with_capacity(bytes.len() + 16);
+        let v = self.0.value.as_ref();
+        let mut out = String::with_capacity(v.len() + 16);
+        let bytes = if v.starts_with(LXEA) {
+            self.value()
+        } else {
+            out.write_str("INVALID: ").unwrap();
+            v
+        };
 
         write!(&mut out, "\"").unwrap();
         crate::escape_utils::escape_bytes_octal(bytes, &mut out, true).unwrap();
@@ -236,7 +249,7 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
 
     fn set_attr(&mut self, name: &str, value: &[u8]) {
         if let Some(x) = self.lx_dot_ea.iter_mut().filter(|x| x.name_display() == name).next() {
-            x.0.value = Cow::Owned(value.to_owned());
+            x.set_value(value);
         } else {
             self.lx_dot_ea.push(LxDotAttr::new_owned(name, value));
         }
@@ -263,7 +276,7 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
         }
 
         for lxea in &self.lx_dot_ea {
-            if let Cow::Owned(ref x) = lxea.0.value {
+            if let Cow::Owned(_) = lxea.0.value {
                 ea_out.add_entry(&lxea.0);
             }
         }

@@ -378,12 +378,12 @@ impl LxxattrOut {
         self.count
     }
     pub fn add(&mut self, name: &[u8], value: &[u8]) {
+        if value.is_empty() {
+            return;
+        }
         if self.buffer.is_empty() {
             // TODO how about big endian?
             self.buffer = vec![0, 0, 1, 0];
-        }
-        if value.is_empty() {
-            return;
         }
         unsafe {
             let this_size = LxxattrEntryRaw::size_inner(name.len() as u8, value.len() as u16);

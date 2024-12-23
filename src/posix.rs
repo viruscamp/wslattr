@@ -210,8 +210,8 @@ pub struct User {
     pub uid: u32,
 }
 
-pub fn load_users(distro_root: &Path) -> Option<Vec<User>> {
-    let file = File::open(distro_root.join("etc/passwd")).ok()?;
+pub fn load_users(rootfs: &Path) -> Option<Vec<User>> {
+    let file = File::open(rootfs.join("etc/passwd")).ok()?;
     let reader = BufReader::new(file);
 
     let users = reader.lines()
@@ -230,8 +230,8 @@ pub struct Group {
     pub gid: u32,
 }
 
-pub fn load_groups(distro_root: &Path) -> Option<Vec<Group>> {
-    let file = File::open(distro_root.join("etc/group")).ok()?;
+pub fn load_groups(rootfs: &Path) -> Option<Vec<Group>> {
+    let file = File::open(rootfs.join("etc/group")).ok()?;
     let reader = BufReader::new(file);
 
     let groups = reader.lines()

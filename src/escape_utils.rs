@@ -60,7 +60,8 @@ pub fn unescape(value: &str) -> Option<Vec<u8>> {
     } else if value.starts_with("0x") || value.starts_with("0X") {
         unescape_hex(&value[2..]).ok()
     } else {
-        unescape_octal(value).ok()
+        // unescaped by shell
+        Some(value.as_bytes().to_vec())
     }
 }
 

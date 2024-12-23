@@ -10,8 +10,8 @@ use crate::{is_path_prefix_disk, normalize_path, try_get_abs_path_prefix, try_ge
 #[derive(Clone, Copy, ValueEnum, Debug)]
 #[derive(PartialEq, Eq)]
 pub enum FsType {
-    Lxfs,
-    Wslfs,
+    Lxfs = 1,
+    Wslfs = 2,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -38,26 +38,42 @@ pub struct Distro {
 
 const REG_LXSS: &'static str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss";
 
-pub fn default() -> Option<Distro> {
+#[allow(non_upper_case_globals)]
+const DefaultDistribution: &str = "DefaultDistribution";
+
+#[allow(non_upper_case_globals)]
+const DistributionName: &str = "DistributionName";
+#[allow(non_upper_case_globals)]
+const BasePath: &str = "BasePath";
+#[allow(non_upper_case_globals)]
+const Flags: &str = "Flags";
+#[allow(non_upper_case_globals)]
+const Version: &str = "Version";
+
+pub fn try_load_from_reg_default() -> Option<Distro> {
     let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
-    let default_distro_guid = lxss.get_string("DefaultDistribution").ok()?;
+    let default_distro_guid = lxss.get_string(DefaultDistribution).ok()?;
     let mut d = try_load_from_reg_key(lxss.open(default_distro_guid).ok()?)?;
     d.source = DistroSource::Default;
     return Some(d);
 }
 
-pub fn try_load<S: AsRef<str>>(name: S) -> Option<Distro> {
+pub fn try_load_reg<S: AsRef<str>>(name: S) -> Option<Key> {
     let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
     lxss.keys().ok()?
     .filter_map(|k| lxss.open(k).ok())
     .filter(|k| {
-        if let Ok(s) = k.get_string("DistributionName") {
+        if let Ok(s) = k.get_string(DistributionName) {
             s.as_str() == name.as_ref()
         } else {
             false
         }
     })
     .nth(0)
+}
+
+pub fn try_load<S: AsRef<str>>(name: S) -> Option<Distro> {
+    try_load_reg(name)
     .and_then(try_load_from_reg_key)
 }
 
@@ -73,7 +89,7 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
         return lxss.keys().ok()?
         .filter_map(|k| lxss.open(k).ok())
         .filter(|k| {
-            if let Ok(s) = k.get_string("BasePath") {
+            if let Ok(s) = k.get_string(BasePath) {
                 if let Ok(base_path) = PathBuf::from_str(&s) {
                     if let Ok(base_path) = normalize_path(&base_path) {
                         return path.starts_with(base_path);
@@ -90,19 +106,19 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
 }
 
 pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
-    let name: String = distro_key.get_string("DistributionName").ok()?;
-    let base_path: String = distro_key.get_string("BasePath").ok()?;
+    let name: String = distro_key.get_string(DistributionName).ok()?;
+    let base_path: String = distro_key.get_string(DistributionName).ok()?;
     let base_path = PathBuf::from_str(&base_path).ok()?;
 
     // & 0x08 = 0 -> WSL1
-    let is_wsl2 = if let Ok(flags) = distro_key.get_u32("Flags") {
+    let is_wsl2 = if let Ok(flags) = distro_key.get_u32(Flags) {
         (flags & 0x08) != 0
     } else {
         false
     };
 
     let fs_type = if !is_wsl2 {
-        match distro_key.get_u32("Version") {
+        match distro_key.get_u32(Version) {
             Ok(1) => Some(FsType::Lxfs),
             Ok(2) => Some(FsType::Wslfs),
             _ => None,
@@ -125,6 +141,18 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
 }
 
 impl Distro {
+    pub fn set_fs_type(&mut self, fs_type: Option<FsType>) {
+        try_load_reg(&self.name).and_then(|k| {
+            match fs_type {
+                None => k.remove_value(Version),
+                Some(FsType::Lxfs) => k.set_u32(Version, FsType::Lxfs as u32),
+                Some(FsType::Wslfs) => k.set_u32(Version, FsType::Wslfs as u32),
+            }.unwrap();
+            self.fs_type = fs_type;            
+            Some(())
+        });
+    }
+
     pub fn uid(&self, user_name: &str) -> Option<u32> {
         self.users.as_ref()
         .and_then(|users|
