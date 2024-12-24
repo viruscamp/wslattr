@@ -6,7 +6,7 @@ use clap::{arg, command, Parser, Subcommand};
 use ea_parse::{EaEntry, EaOut};
 use lxfs::{EaLxattrbV1, LxfsParsed, LxxattrOut, LXATTRB, LXXATTR};
 use ntfs_io::{delete_reparse_point, query_file_basic_infomation, write_data};
-use path_utils::*;
+use path_utils::{is_path_prefix_disk, is_unix_absolute, try_get_abs_path_prefix, try_get_distro_from_unc_prefix};
 use distro::{Distro, DistroSource, FsType};
 use posix::{chmod_all, lsperms, StModeType, DEFAULT_MODE};
 use time_utils::LxfsTime;
@@ -439,52 +439,45 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
 }
 
 fn load_wsl_file(in_path: &Path, distro: Option<&Distro>) -> Option<WslFile> {
-    let full_path;
     let real_path;
 
     if is_unix_absolute(in_path) {
         // unix path with root like r"/usr/bin"
-        println!("unix path: {:?}", in_path);
+        println!("unix path: {}", in_path.display());
 
         let d = distro.expect("argument --distro is needed for unix path");
-        //println!("distro: {:?}", d);
 
         let mut unix_path_comps = in_path.components();
-        unix_path_comps.next(); // RootDir
-        real_path = d.base_path.join("rootfs").join(unix_path_comps); // .skip(1)
-
-        full_path = in_path.to_path_buf();
+        unix_path_comps.next(); // skip RootDir
+        real_path = d.base_path.join("rootfs").join(unix_path_comps);
     } else {
         let abs_path = absolute(in_path).expect(&format!("invalid path: {:?}", in_path));
         let path_prefix = try_get_abs_path_prefix(&abs_path);
-        if let Some(distro_name) = path_prefix.as_ref().and_then(try_get_distro_from_unc_prefix) {
-            // wsl UNC path like r"\\wsl$\Arch\file"
-            println!("try load distro from wsl path: {:?}!", distro_name);
+        if let Some(distro_name_from_path) = path_prefix.as_ref().and_then(try_get_distro_from_unc_prefix) {
+            println!("UNC path:  {}", &abs_path.display());
 
-            // TODO distro has been loaded
-            let distro = distro::try_load(&distro_name.to_str()?);
-            let d = distro.as_ref().expect(&format!("invalid distro: {:?}", distro_name));
-            //println!("distro: {:?}", d);
+            // wsl UNC path like r"\\wsl$\Arch\file"
+            let distro = distro.unwrap_or_else(|| {
+                panic!("no distro loaded for a WSL UNC path: {}", abs_path.display());
+            });
+            if distro_name_from_path != distro.name.as_str() {
+                panic!("distro: {} loaded does not match the WSL UNC path: {}", &distro.name, abs_path.display());
+            }
 
             let mut abs_path_comps = abs_path.components();
-            abs_path_comps.next(); // Prefix
-            abs_path_comps.next(); // RootDir
-            real_path = d.base_path.join("rootfs").join(abs_path_comps); // .skip(2)
-
-            full_path = abs_path;
+            abs_path_comps.next(); // skip Prefix
+            abs_path_comps.next(); // sklp RootDir
+            real_path = distro.base_path.join("rootfs").join(abs_path_comps); // .skip(2)
         } else if is_path_prefix_disk(&path_prefix) {
             // normal path like r"D:\file"
             real_path = abs_path.clone();
-            full_path = abs_path;
         } else {
-            dbg!(path_prefix);
             // unsupported path like r"\\remote\share\"
             panic!("unsupported path {:?}", abs_path);
         }
     }
 
-    println!("full_path: {}", &full_path.display());
-    println!("real_path: {}", &real_path.display());
+    println!("real path: {}", &real_path.display());
 
     unsafe {
         let wsl_file = wsl_file::open_handle(&real_path, false).expect("failed to open file");
@@ -502,8 +495,10 @@ fn downgrade_distro(distro: &mut Distro) {
             }
         }
     }
-    distro.set_fs_type(Some(FsType::Lxfs));
-    println!("downgrade success, set {} fs_type(Version) to 1", &distro.name);
+    match distro.set_fs_type(Some(FsType::Lxfs)) {
+        Ok(_) => println!("downgrade success, set {} fs_type(Version) to 1", &distro.name),
+        Err(_) => println!("downgrade fail, set {} fs_type(Version) failed", &distro.name),
+    };
 }
 
 fn downgrade_path(real_path: &Path) -> std::io::Result<()> {

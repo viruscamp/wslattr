@@ -1,11 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use clap::ValueEnum;
 use windows_registry::{Key, CURRENT_USER};
 
 use crate::posix::{load_groups, load_users, Group, User};
-use crate::{is_path_prefix_disk, normalize_path, try_get_abs_path_prefix, try_get_distro_from_unc_path};
+use crate::path_utils::{is_path_prefix_disk, normalize_path, try_get_abs_path_prefix, try_get_distro_from_unc_path};
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
 #[derive(PartialEq, Eq)]
@@ -84,7 +83,6 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
 
     if is_path_prefix_disk(&try_get_abs_path_prefix(path.as_ref())) {
         let path = normalize_path(path.as_ref()).ok()?;
-
         let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
         return lxss.keys().ok()?
         .filter_map(|k| lxss.open(k).ok())
@@ -106,7 +104,7 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
 pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
     let name: String = distro_key.get_string(DistributionName).ok()?;
     let base_path: String = distro_key.get_string(BasePath).ok()?;
-    let base_path = PathBuf::from_str(&base_path).ok()?;
+    let base_path = PathBuf::from(&base_path);
 
     // & 0x08 = 0 -> WSL1
     let is_wsl2 = if let Ok(flags) = distro_key.get_u32(Flags) {
@@ -139,16 +137,16 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
 }
 
 impl Distro {
-    pub fn set_fs_type(&mut self, fs_type: Option<FsType>) {
-        try_load_reg(&self.name).and_then(|k| {
+    pub fn set_fs_type(&mut self, fs_type: Option<FsType>) -> Result<(), ()> {
+        try_load_reg(&self.name).map_or(Err(()), |k| {
             match fs_type {
                 None => k.remove_value(Version),
                 Some(FsType::Lxfs) => k.set_u32(Version, FsType::Lxfs as u32),
                 Some(FsType::Wslfs) => k.set_u32(Version, FsType::Wslfs as u32),
-            }.unwrap();
+            }.map_err(|_| ())?;
             self.fs_type = fs_type;            
-            Some(())
-        });
+            Ok(())
+        })
     }
 
     pub fn uid(&self, user_name: &str) -> Option<u32> {
