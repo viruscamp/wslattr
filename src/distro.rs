@@ -105,7 +105,7 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
 
 pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
     let name: String = distro_key.get_string(DistributionName).ok()?;
-    let base_path: String = distro_key.get_string(DistributionName).ok()?;
+    let base_path: String = distro_key.get_string(BasePath).ok()?;
     let base_path = PathBuf::from_str(&base_path).ok()?;
 
     // & 0x08 = 0 -> WSL1
