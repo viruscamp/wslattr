@@ -209,7 +209,7 @@ fn open_to_view(args: ArgsView, f: impl FnOnce(WslFile, Option<Distro>, WslfsPar
 
 fn view(args_view: ArgsView) {
     open_to_view(args_view, |wsl_file, distro, wslfs, lxfs| {        
-        print_file_time(wsl_file.file_handle);
+        print_file_time(&wsl_file);
 
         wslfs.fmt(&mut std::io::stdout().lock(), distro.as_ref()).unwrap();
         lxfs.fmt(&mut std::io::stdout().lock(), distro.as_ref()).unwrap();
@@ -462,7 +462,7 @@ fn load_wsl_file(in_path: &Path, distro: Option<&Distro>) -> Option<WslFile> {
         let path_prefix = try_get_abs_path_prefix(&abs_path);
         if let Some(distro_name_from_path) = path_prefix.as_ref().and_then(try_get_distro_from_unc_prefix) {
             // wsl UNC path like r"\\wsl$\Arch\file"
-            println!("UNC path:  {}", &abs_path.display());
+            println!("UNC path : {}", &abs_path.display());
 
             let distro = distro.unwrap_or_else(|| {
                 panic!("no distro loaded for a WSL UNC path: {}", abs_path.display());
@@ -540,7 +540,7 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
     let mut ea_out = EaOut::default();
 
     // 1. for all files, set LXATTRB
-    let mut lxattrb = EaLxattrbV1::default();
+    let mut lxattrb = EaLxattrbV1::new(&wsl_file.basic_file_info);
 
     lxattrb.st_uid = wslfs.get_uid().unwrap_or(0);
     lxattrb.st_gid = wslfs.get_gid().unwrap_or(0);
@@ -549,12 +549,6 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
     let dev_major = wslfs.get_dev_major().unwrap_or(0);
     let dev_minor = wslfs.get_dev_minor().unwrap_or(0);
     lxattrb.st_rdev = lxfs::make_dev(dev_major, dev_minor);
-
-    if let Ok(fbi) = query_file_basic_infomation(wsl_file.file_handle) {
-        (lxattrb.st_atime, lxattrb.st_atime_nsec) = time_utils::u64_to_lxfs_time(fbi.LastAccessTime as u64).into();
-        (lxattrb.st_mtime, lxattrb.st_mtime_nsec) = time_utils::u64_to_lxfs_time(fbi.LastWriteTime as u64).into();
-        (lxattrb.st_ctime, lxattrb.st_ctime_nsec) = time_utils::u64_to_lxfs_time(fbi.ChangeTime as u64).into();
-    }
 
     let lxattrb_bytes = unsafe {
 		std::slice::from_raw_parts(
@@ -599,8 +593,8 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
     }
 }
 
-fn print_file_time(file_handle: HANDLE) {
-    if let Ok(fbi) = query_file_basic_infomation(file_handle) {
+fn print_file_time(wsl_file: &WslFile) {
+    if let Some(fbi) = wsl_file.basic_file_info {
         let creation_time: LxfsTime = (fbi.CreationTime as u64).into();
         println!("{:28}{}", "CreationTime:", creation_time);
         let last_access_time: LxfsTime = (fbi.LastAccessTime as u64).into();

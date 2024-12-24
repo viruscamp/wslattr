@@ -2,11 +2,13 @@ use std::borrow::Cow;
 use std::mem::{offset_of, transmute};
 use std::ptr::{addr_of, slice_from_raw_parts};
 
+use windows::Wdk::Storage::FileSystem::FILE_BASIC_INFORMATION;
+
 use crate::distro::{Distro, FsType};
 use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
-use crate::posix::{lsperms, StModeType};
+use crate::posix::{lsperms, StModeType, DEFAULT_MODE};
 use crate::ntfs_io::read_data;
-use crate::time_utils::LxfsTime; 
+use crate::time_utils::{u64_to_lxfs_time, LxfsTime}; 
 use crate::wsl_file::{WslFile, WslFileAttributes};
 
 pub const LXATTRB: &'static str = "LXATTRB";
@@ -30,12 +32,12 @@ pub struct EaLxattrbV1 {
     pub st_ctime: u64,      // Time of change of file.
 }
 
-impl Default for EaLxattrbV1 {
-    fn default() -> Self {
-        Self {
+impl EaLxattrbV1 {
+    pub fn new(basic_file_info: &Option<FILE_BASIC_INFORMATION>) -> Self {
+        let mut lxattrb = Self {
             flags: 0,
             version: 1,
-            st_mode: 0o0644,
+            st_mode: DEFAULT_MODE,
             st_uid: 0,
             st_gid: 0,
             st_rdev: 0,
@@ -45,7 +47,15 @@ impl Default for EaLxattrbV1 {
             st_atime: 0,
             st_mtime: 0,
             st_ctime: 0,
+        };
+
+        if let Some(fbi) = basic_file_info {
+            (lxattrb.st_atime, lxattrb.st_atime_nsec) = u64_to_lxfs_time(fbi.LastAccessTime as u64).into();
+            (lxattrb.st_mtime, lxattrb.st_mtime_nsec) = u64_to_lxfs_time(fbi.LastWriteTime as u64).into();
+            (lxattrb.st_ctime, lxattrb.st_ctime_nsec) = u64_to_lxfs_time(fbi.ChangeTime as u64).into();
         }
+
+        return lxattrb;
     }
 }
 
@@ -54,6 +64,8 @@ pub struct LxfsParsed<'a> {
     pub lxattrb: Option<Cow<'a, EaLxattrbV1>>,
     lxxattr: Option<Vec<LxxattrEntry<'a>>>,
     pub symlink: Option<String>,
+
+    pub basic_file_info: Option<FILE_BASIC_INFORMATION>,
 }
 
 const MINORBITS: usize = 20;
@@ -72,6 +84,7 @@ pub const fn make_dev(ma: u32, mi: u32) -> u32 {
 impl<'a> LxfsParsed<'a> {
     pub fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>)-> Self {
         let mut p = Self::default();
+        p.basic_file_info = wsl_file.basic_file_info;
 
         if let Some(ea_parsed) = ea_parsed {
             for EaEntry { name, value, flags: _ } in ea_parsed {
@@ -94,6 +107,14 @@ impl<'a> LxfsParsed<'a> {
         }
 
         p
+    }
+
+    fn lxattrb_mut(&mut self) -> &mut EaLxattrbV1 {
+        let lxattrb = self.lxattrb.take().unwrap_or_else(|| {
+            Cow::Owned(EaLxattrbV1::new(&self.basic_file_info))
+        });
+        self.lxattrb = Some(lxattrb);
+        self.lxattrb.as_mut().unwrap().to_mut()
     }
 }
 
@@ -187,40 +208,35 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
     }
     
     fn set_uid(&mut self, uid: u32) {
-        let mut lxattrb = self.lxattrb.take().unwrap_or_default();
-        lxattrb.to_mut().st_uid = uid;
-        self.lxattrb = Some(lxattrb);
+        self.lxattrb_mut().st_uid = uid;
     }
     
     fn set_gid(&mut self, gid: u32) {
-        let mut lxattrb = self.lxattrb.take().unwrap_or_default();
-        lxattrb.to_mut().st_gid = gid;
-        self.lxattrb = Some(lxattrb);
+        self.lxattrb_mut().st_gid = gid;
     }
     
     fn set_mode(&mut self, mode: u32) {
-        let mut lxattrb = self.lxattrb.take().unwrap_or_default();
-        lxattrb.to_mut().st_mode = mode;
-        self.lxattrb = Some(lxattrb);
+        self.lxattrb_mut().st_mode = mode;
     }
     
     fn set_dev_major(&mut self, ma: u32) {
-        let mut lxattrb = self.lxattrb.take().unwrap_or_default();
+        let mut lxattrb = self.lxattrb_mut();
         let st_rdev = lxattrb.st_rdev;
-        lxattrb.to_mut().st_rdev = make_dev(ma, dev_minor(st_rdev));
-        self.lxattrb = Some(lxattrb);
+        lxattrb.st_rdev = make_dev(ma, dev_minor(st_rdev));
     }
     
     fn set_dev_minor(&mut self, mi: u32) {
-        let mut lxattrb = self.lxattrb.take().unwrap_or_default();
+        let mut lxattrb = self.lxattrb_mut();
         let st_rdev = lxattrb.st_rdev;
-        lxattrb.to_mut().st_rdev = make_dev(dev_major(st_rdev), mi);
-        self.lxattrb = Some(lxattrb);
+        lxattrb.st_rdev = make_dev(dev_major(st_rdev), mi);
     }
 
     fn set_attr(&mut self, name: &str, value: &[u8]) {
         let mut lxxattr = self.lxxattr.take().unwrap_or_default();
-        if let Some(x) = lxxattr.iter_mut().filter(|x| x.name.as_ref() == name.as_bytes()).next() {
+        if let Some(x) = lxxattr.iter_mut()
+            .filter(|x| x.name.as_ref() == name.as_bytes())
+            .next()
+        {
             x.value = Some(Cow::Owned(value.to_owned()));
         } else {
             let name = Cow::Owned(name.as_bytes().to_owned());
@@ -232,7 +248,10 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
 
     fn rm_attr(&mut self, name: &str) {
         let mut lxxattr = self.lxxattr.take().unwrap_or_default();
-        if let Some(x) = lxxattr.iter_mut().filter(|x| x.name.as_ref() == name.as_bytes()).next() {
+        if let Some(x) = lxxattr.iter_mut()
+            .filter(|x| x.name.as_ref() == name.as_bytes())
+            .next()
+        {
             x.value = None;
         }
         self.lxxattr = Some(lxxattr);

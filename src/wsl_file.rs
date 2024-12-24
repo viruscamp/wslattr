@@ -6,7 +6,7 @@ use std::path::Path;
 use std::ptr::null_mut;
 
 use windows::core::PWSTR;
-use windows::Wdk::Storage::FileSystem::{NtOpenFile, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT};
+use windows::Wdk::Storage::FileSystem::{NtOpenFile, FILE_BASIC_INFORMATION, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT};
 use windows::Win32::Foundation::{HANDLE, NTSTATUS, STATUS_IO_REPARSE_TAG_NOT_HANDLED, STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING};
 use windows::Win32::System::WindowsProgramming::RtlFreeUnicodeString;
 use windows::Win32::System::IO::IO_STATUS_BLOCK;
@@ -17,7 +17,7 @@ use windows::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONAT
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
 use crate::distro::FsType;
-use crate::ntfs_io::read_ea_all;
+use crate::ntfs_io::{query_file_basic_infomation, read_ea_all};
 
 pub trait WslFileAttributes<'a> {
     fn fs_type(&self) -> FsType;
@@ -52,6 +52,8 @@ pub struct WslFile {
     pub writable: bool,
 
     pub reparse_tag: Option<u32>,
+
+    pub basic_file_info: Option<FILE_BASIC_INFORMATION>,
 }
 
 impl WslFile {
@@ -118,6 +120,8 @@ pub unsafe fn open_handle(path: &Path, writable: bool) -> Result<WslFile> {
         }
         wsl_file.reparse_tag = Some(file_attribute_tag_info.ReparseTag);
     }
+
+    wsl_file.basic_file_info = query_file_basic_infomation(wsl_file.file_handle).ok();
 
     wsl_file.writable = writable;
     return Ok(wsl_file);

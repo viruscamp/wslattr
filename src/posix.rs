@@ -12,7 +12,7 @@ pub const ST_MODE_TYPE_SOCK: u32 = 0o_0140000;
 /// type of file mask for st_mode 
 pub const ST_MODE_TYPE_MASK: u32 = 0o_0170000;
 
-pub const DEFAULT_MODE: u32 = 0o_0170644;
+pub const DEFAULT_MODE: u32 = 0o_0100644;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
