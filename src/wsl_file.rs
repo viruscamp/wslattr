@@ -39,6 +39,7 @@ pub trait WslFileAttributes<'a> {
     fn set_dev_minor(&mut self, dev_minor: u32);
 
     fn set_attr(&mut self, name: &str, value: &[u8]);
+    fn rm_attr(&mut self, name: &str);
 
     fn save(&mut self, wsl_file: &mut WslFile) -> std::io::Result<()> ;
 }

@@ -41,18 +41,29 @@ pub type LxDotAttrCow<'a> = LxDotAttr<Cow<'a, [u8]>>;
 
 impl<'a> LxDotAttrCow<'a> {
     pub fn new_owned(name: &str, value: &[u8]) -> Self {
-        let mut name_buf = Vec::with_capacity(LX_DOT.as_bytes().len() + name.as_bytes().len());
-        name_buf.append(&mut LX_DOT.as_bytes().to_vec());
-        name_buf.append(&mut name.as_bytes().to_vec());
-
-        LxDotAttr(EaEntry { flags: 0, name: name_buf.into(), value: Self::make_value(value).into() })
+        LxDotAttr(EaEntry {
+            flags: 0,
+            name: Self::make_name(name).into(),
+            value: Self::make_value(value).into(),
+        })
     }
 
     pub fn set_value(&mut self, value: &[u8]) {
         self.0.value = Self::make_value(value).into();
     }
 
-    pub fn make_value(value: &[u8]) -> Vec<u8> {
+    pub fn set_value_to_rm(&mut self) {
+        self.0.value = Cow::Owned(vec![]);
+    }
+
+    fn make_name(name: &str) -> Vec<u8> {
+        let mut name_buf = Vec::with_capacity(LX_DOT.as_bytes().len() + name.as_bytes().len());
+        name_buf.append(&mut LX_DOT.as_bytes().to_vec());
+        name_buf.append(&mut name.as_bytes().to_vec());
+        name_buf
+    }
+
+    fn make_value(value: &[u8]) -> Vec<u8> {
         let mut value_buf = Vec::with_capacity(LXEA.len() + value.len());
         value_buf.append(&mut LXEA.to_vec());
         value_buf.append(&mut value.to_vec());
@@ -255,6 +266,12 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
         }
     }
 
+    fn rm_attr(&mut self, name: &str) {
+        if let Some(x) = self.lx_dot_ea.iter_mut().filter(|x| x.name_display() == name).next() {
+            x.set_value_to_rm();
+        }
+    }
+
     fn save(&mut self, wsl_file: &mut WslFile) -> std::io::Result<()> {
         use crate::ea_parse::{EaOut, get_buffer};
         use crate::ntfs_io::write_ea;
@@ -275,11 +292,14 @@ impl<'a> WslFileAttributes<'a> for WslfsParsed<'a> {
             ea_out.add(LXDEV.as_bytes(), get_buffer(x));
         }
 
-        for lxea in &self.lx_dot_ea {
+        self.lx_dot_ea = core::mem::take(&mut self.lx_dot_ea).into_iter().filter(|lxea| {
             if let Cow::Owned(_) = lxea.0.value {
                 ea_out.add_entry(&lxea.0);
+                !lxea.0.value.is_empty()
+            } else {
+                true
             }
-        }
+        }).collect();
 
         unsafe { write_ea(wsl_file.file_handle, &ea_out.buffer) }
     }

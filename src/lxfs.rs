@@ -52,8 +52,7 @@ impl Default for EaLxattrbV1 {
 #[derive(Default)]
 pub struct LxfsParsed<'a> {
     pub lxattrb: Option<Cow<'a, EaLxattrbV1>>,
-    // do not keep deleted
-    pub lxxattr: Option<Vec<LxxattrEntry<'a>>>,
+    lxxattr: Option<Vec<LxxattrEntry<'a>>>,
     pub symlink: Option<String>,
 }
 
@@ -222,11 +221,19 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
     fn set_attr(&mut self, name: &str, value: &[u8]) {
         let mut lxxattr = self.lxxattr.take().unwrap_or_default();
         if let Some(x) = lxxattr.iter_mut().filter(|x| x.name.as_ref() == name.as_bytes()).next() {
-            x.value = Cow::Owned(value.to_owned());
+            x.value = Some(Cow::Owned(value.to_owned()));
         } else {
             let name = Cow::Owned(name.as_bytes().to_owned());
-            let value = Cow::Owned(value.to_owned());
+            let value = Some(Cow::Owned(value.to_owned()));
             lxxattr.push(LxxattrEntry { name, value });
+        }
+        self.lxxattr = Some(lxxattr);
+    }
+
+    fn rm_attr(&mut self, name: &str) {
+        let mut lxxattr = self.lxxattr.take().unwrap_or_default();
+        if let Some(x) = lxxattr.iter_mut().filter(|x| x.name.as_ref() == name.as_bytes()).next() {
+            x.value = None;
         }
         self.lxxattr = Some(lxxattr);
     }
@@ -241,21 +248,28 @@ impl<'a> WslFileAttributes<'a> for LxfsParsed<'a> {
             ea_out.add(LXATTRB.as_bytes(), get_buffer(x));
         }
 
-        if let Some(ref x) = self.lxxattr {            
+        if let Some(x) = self.lxxattr.take() {            
             let mut lxxattr_out = LxxattrOut::default();
-            for attr in x {
-                lxxattr_out.add(&attr.name, &attr.value);
-            }
+            let t = x.into_iter().filter(|attr| {
+                if let Some(ref value) = attr.value {
+                    lxxattr_out.add(&attr.name, value);
+                    true
+                } else {
+                    false
+                }
+            }).collect();
             ea_out.add(LXXATTR.as_bytes(), &lxxattr_out.buffer);
+            self.lxxattr = Some(t);
         }
 
         unsafe { write_ea(wsl_file.file_handle, &ea_out.buffer) }
     }
 }
 
-pub struct LxxattrEntry<'a> {
+struct LxxattrEntry<'a> {
     pub name: Cow<'a, [u8]>,
-    pub value: Cow<'a, [u8]>,
+    /// None means will be deleted in save
+    pub value: Option<Cow<'a, [u8]>>,
 }
 
 impl<'a> LxxattrEntry<'a> {
@@ -266,14 +280,17 @@ impl<'a> LxxattrEntry<'a> {
     fn value_display(&'a self) -> String {
         use std::fmt::Write;
 
-        let bytes = self.value.as_ref();
-        let mut out = String::with_capacity(bytes.len() + 16);
+        if let Some(x) = &self.value {
+            let bytes = x.as_ref();
+            let mut out = String::with_capacity(bytes.len() + 16);
+            write!(&mut out, "\"").unwrap();
+            crate::escape_utils::escape_bytes_octal(bytes, &mut out, true).unwrap();
+            write!(&mut out, "\"").unwrap();
 
-        write!(&mut out, "\"").unwrap();
-        crate::escape_utils::escape_bytes_octal(bytes, &mut out, true).unwrap();
-        write!(&mut out, "\"").unwrap();
-
-        out
+            out
+        } else {
+            "TO_RM".to_owned()
+        }
     }
 }
 
@@ -322,7 +339,7 @@ struct LxxattrRaw {
     entries: [LxxattrEntryRaw; 1],
 }
 
-pub unsafe fn parse_lxxattr<'a>(buffer: &'a [u8]) -> Vec<LxxattrEntry<'a>> {
+unsafe fn parse_lxxattr<'a>(buffer: &'a [u8]) -> Vec<LxxattrEntry<'a>> {
     let mut entries = vec![];
 
     assert!(buffer.len() >= size_of::<LxxattrRaw>());
@@ -349,7 +366,7 @@ pub unsafe fn parse_lxxattr<'a>(buffer: &'a [u8]) -> Vec<LxxattrEntry<'a>> {
 
         entries.push(LxxattrEntry {
             name: Cow::Borrowed(name),
-            value: Cow::Borrowed(value),
+            value: Some(Cow::Borrowed(value)),
         });
 
         if pea.next_entry_offset == 0 {
@@ -376,9 +393,6 @@ impl LxxattrOut {
         self.count
     }
     pub fn add(&mut self, name: &[u8], value: &[u8]) {
-        if value.is_empty() {
-            return;
-        }
         if self.buffer.is_empty() {
             // TODO how about big endian?
             self.buffer = vec![0, 0, 1, 0];

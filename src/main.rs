@@ -93,6 +93,13 @@ enum Command {
         #[clap(flatten)]
         args_change: ArgsChange,
     },
+    RmAttr {
+        #[arg(long, short)]
+        name: String,
+
+        #[clap(flatten)]
+        args_change: ArgsChange,
+    },
     Downgrade {
         /// file to change
         #[clap(conflicts_with("distro"))]
@@ -129,6 +136,7 @@ fn main() {
             Chgrp { args_change, group } => chgrp(args_change, group),
             Chmod { args_change, modes } => chmod(args_change, modes),
             SetAttr { args_change, name, value } => set_attr(args_change, name, value),
+            RmAttr { args_change, name } => rm_attr(args_change, name),
             Downgrade { path, distro } => {
                 if path.is_some() && distro.is_some() {
                     println!("[ERROR] path and distro args are conflicted");
@@ -336,7 +344,18 @@ fn set_attr(args: ArgsChange, name: String, value: Option<String>) {
         if let Err(ex) = wsl_attrs.save(&mut wsl_file) {
             println!("[ERROR] set_attr for {:?}, error: {ex:?}", wsl_attrs.fs_type());
         } else {
-            println!("chmod set_attr {:?}", wsl_attrs.fs_type());
+            println!("set_attr for {:?}", wsl_attrs.fs_type());
+        }
+    });
+}
+
+fn rm_attr(args: ArgsChange, name: String) {
+    open_to_change(args, |mut wsl_file, _distro, wsl_attrs| {
+        wsl_attrs.rm_attr(&name);
+        if let Err(ex) = wsl_attrs.save(&mut wsl_file) {
+            println!("[ERROR] rm_attr for {:?}, error: {ex:?}", wsl_attrs.fs_type());
+        } else {
+            println!("rm_attr for {:?}", wsl_attrs.fs_type());
         }
     });
 }
