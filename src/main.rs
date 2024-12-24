@@ -375,16 +375,13 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
         if let Some(mut d) = distro {
             d.source = DistroSource::Arg;
             if d.fs_type.is_none() {
-                // TODO should panic
-                print!("[ERROR] WSL distro: {} is WSL2", &d.name);
-                return None;
+                panic!("[ERROR] distro from arg: {} is WSL2", &d.name)
+            } else {
+                println!("distro: {} loaded from arg", distro_name);
+                return Some(d);
             }
-            println!("distro: {} loaded from arg", distro_name);
-            return Some(d);
         } else {
-            // TODO should panic
-            print!("[ERROR] cannot load WSL distro: {}", distro_name);
-            return None;
+            panic!("[ERROR] cannot load distro from arg: {}", distro_name)
         }
     }
 
@@ -395,30 +392,22 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
             //println!("try load distro fron file path: {}", in_path.display());
             let distro = distro::try_load_from_absolute_path(in_path);
             if let Some(mut d) = distro {
-                d.source = DistroSource::FilePath;
                 if d.fs_type.is_none() {
-                    // TODO should panic
-                    print!("[ERROR] WSL distro: {} is WSL2", &d.name);
-                    return None;
+                    println!("[WARNING] distro: {} loaded from file path is WSL2, ignore it", &d.name);
+                } else {
+                    println!("distro: {} loaded from file path: {}", &d.name, in_path.display());
+                    return Some(d);
                 }
-                println!("distro: {} loaded from file path: {}", &d.name, in_path.display());
-                return Some(d);
             }
         }
-    }    
+    }
 
     // try load distro fron current path
-    if let Ok(cd) = std::env::current_dir() {
-        //println!("try load distro from current dir: {}", &cd.display());
-        let distro = distro::try_load_from_absolute_path(&cd);
-        if let Some(mut d) = distro {
-            d.source = DistroSource::CurrentDir;
-            if d.fs_type.is_none() {
-                // TODO should panic
-                print!("[ERROR] WSL distro: {} is WSL2", &d.name);
-                return None;
-            }
-            println!("distro: {} loaded from current dir: {}", &d.name, cd.display());
+    if let Some(mut d) = distro::try_load_from_current_dir() {
+        if d.fs_type.is_none() {
+            println!("[WARNING] distro: {} loaded from current dir is WSL2, ignore it", &d.name);
+        } else {
+            println!("distro: {} loaded from current dir: {}", &d.name, std::env::current_dir().unwrap().display());
             return Some(d);
         }
     }
@@ -426,12 +415,11 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
     // try load default WSL distro in registry
     if let Some(d) = distro::try_load_from_reg_default() {
         if d.fs_type.is_none() {
-            // TODO should panic
-            print!("[ERROR] WSL distro: {} is WSL2", &d.name);
-            return None;
+            println!("[WARNING] distro: {} loaded from default WSL distro in registry is WSL2, ignore it", &d.name);
+        } else {
+            println!("distro: {} loaded from default WSL distro in registry", &d.name);
+            return Some(d);
         }
-        println!("distro: {} loaded from default WSL distro in registry", &d.name);
-        return Some(d);
     }
 
     println!("no distro loaded");
@@ -454,9 +442,9 @@ fn load_wsl_file(in_path: &Path, distro: Option<&Distro>) -> Option<WslFile> {
         let abs_path = absolute(in_path).expect(&format!("invalid path: {:?}", in_path));
         let path_prefix = try_get_abs_path_prefix(&abs_path);
         if let Some(distro_name_from_path) = path_prefix.as_ref().and_then(try_get_distro_from_unc_prefix) {
+            // wsl UNC path like r"\\wsl$\Arch\file"
             println!("UNC path:  {}", &abs_path.display());
 
-            // wsl UNC path like r"\\wsl$\Arch\file"
             let distro = distro.unwrap_or_else(|| {
                 panic!("no distro loaded for a WSL UNC path: {}", abs_path.display());
             });
@@ -470,10 +458,10 @@ fn load_wsl_file(in_path: &Path, distro: Option<&Distro>) -> Option<WslFile> {
             real_path = distro.base_path.join("rootfs").join(abs_path_comps); // .skip(2)
         } else if is_path_prefix_disk(&path_prefix) {
             // normal path like r"D:\file"
-            real_path = abs_path.clone();
+            real_path = abs_path;
         } else {
             // unsupported path like r"\\remote\share\"
-            panic!("unsupported path {:?}", abs_path);
+            panic!("unsupported path {}", abs_path.display());
         }
     }
 

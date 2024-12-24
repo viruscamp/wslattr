@@ -19,8 +19,10 @@ pub enum DistroSource {
     Unknown,
     Arg,
     Default,
-    CurrentDir,
-    FilePath,
+    CurrentDirUNC,
+    CurrentDirDisk,
+    FilePathUNC,
+    FilePathDisk,
 }
 
 #[derive(Debug)]
@@ -78,7 +80,11 @@ pub fn try_load<S: AsRef<str>>(name: S) -> Option<Distro> {
 
 pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
     if let Some(n) = try_get_distro_from_unc_path(path.as_ref()) {
-        return try_load(&n.to_string_lossy());
+        return try_load(&n.to_string_lossy())
+        .and_then(|mut x| {
+            x.source = DistroSource::FilePathUNC;
+            Some(x)
+        });
     }
 
     if is_path_prefix_disk(&try_get_abs_path_prefix(path.as_ref())) {
@@ -95,10 +101,27 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
             return false;
         })
         .nth(0)
-        .and_then(try_load_from_reg_key);
+        .and_then(try_load_from_reg_key)
+        .map(|mut x| {
+            x.source = DistroSource::FilePathDisk;
+            x
+        });
     }
 
     return None;
+}
+
+pub fn try_load_from_current_dir() -> Option<Distro> {
+    std::env::current_dir().ok()
+    .and_then(try_load_from_absolute_path)
+    .map(|mut x| {
+        x.source = match x.source {
+            DistroSource::FilePathUNC => DistroSource::CurrentDirUNC,
+            DistroSource::FilePathDisk => DistroSource::CurrentDirDisk,
+            other => other,
+        };
+        x
+    })
 }
 
 pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
