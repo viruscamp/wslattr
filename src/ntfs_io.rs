@@ -236,7 +236,7 @@ pub fn error_msg_ntdll(msgid: u32) -> windows::core::Result<String> {
 
         if size > 0 {
             let message_string_result = lp_allocated_buffer.to_string();
-            let hresult = LocalFree(HLOCAL(lp_allocated_buffer.as_ptr() as _));
+            let hresult = LocalFree(Some(HLOCAL(lp_allocated_buffer.as_ptr() as _)));
             if hresult.0 == 0 as _ {
                 return Ok(message_string_result?);
             } else {

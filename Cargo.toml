@@ -11,18 +11,18 @@ normpath = "1"
 regex = "1.11"
 time = { version = "0.3", features = ['formatting'] }
 walkdir = "2.5"
-windows-registry = "0.3"
+windows-registry = "0.4"
 
 [dependencies.windows]
-version = "0.58"
+version = "0.59"
 features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Win32_System_LibraryLoader",
-    "Win32_System_Kernel",
     "Win32_System_IO",
     "Win32_System_Ioctl",
     "Win32_System_WindowsProgramming",
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_Debug",
+    "Win32_Security",
 ]
