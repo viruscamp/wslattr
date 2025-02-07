@@ -105,7 +105,7 @@ impl<Bytes: AsRef<[u8]>> LxDotAttr<Bytes> {
         };
 
         write!(&mut out, "\"").unwrap();
-        crate::escape_utils::escape_bytes_octal(bytes, &mut out, true).unwrap();
+        crate::escape_utils::escape_bytes_bash(bytes, &mut out, true).unwrap();
         write!(&mut out, "\"").unwrap();
 
         out

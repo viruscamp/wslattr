@@ -303,7 +303,7 @@ impl<'a> LxxattrEntry<'a> {
             let bytes = x.as_ref();
             let mut out = String::with_capacity(bytes.len() + 16);
             write!(&mut out, "\"").unwrap();
-            crate::escape_utils::escape_bytes_octal(bytes, &mut out, true).unwrap();
+            crate::escape_utils::escape_bytes_bash(bytes, &mut out, true).unwrap();
             write!(&mut out, "\"").unwrap();
 
             out

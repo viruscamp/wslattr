@@ -25,8 +25,9 @@ pub fn escape_char_octal(ch: char, mut w: impl Write, keep_utf8: bool) -> Result
     Ok(())
 }
 
+/// escape like bash
 /// escape all control char as octal `\777`, plus `\`, `"`, keep visible utf8 if keep_utf8
-pub fn escape_bytes_octal(bytes: &[u8], mut w: impl Write, keep_utf8: bool) -> Result<(), std::fmt::Error> {
+pub fn escape_bytes_bash(bytes: &[u8], mut w: impl Write, keep_utf8: bool) -> Result<(), std::fmt::Error> {
     for chunk in bytes.utf8_chunks() {
         for ch in chunk.valid().chars() {
             escape_char_octal(ch, &mut w, keep_utf8)?;
@@ -65,7 +66,8 @@ pub fn unescape(value: &str) -> Option<Vec<u8>> {
     }
 }
 
-fn unescape_octal(value: &str) -> Result<Vec<u8>, ()> {
+/// unescape like bash
+fn unescape_bash(value: &str) -> Result<Vec<u8>, ()> {
     let mut out = vec![];
     let mut next = &value[0..];
     while let Some(pos) = next.find(r"\") {
@@ -109,28 +111,27 @@ fn unescape_hex(value: &str) -> Result<Vec<u8>, ()> {
 
 #[test]
 fn test_unescape() {
-    let a = unescape("0x61625c745c6e1b24").unwrap();
-    let b = unescape("0sYWJcdFxuGyQ=").unwrap();
+    let bytes: &[u8] = &[97, 98, 92, 116, 92, 110, 27, 36];
 
-    assert_eq!(a, b);
-    
-    let c = unescape(r#"ab\\t\\n\033$"#).unwrap();
-    assert_eq!(a, c);
+    assert_eq!(bytes, unescape("0x61625c745c6e1b24").unwrap());
+    assert_eq!(bytes, unescape("0sYWJcdFxuGyQ=").unwrap());
+    assert_eq!(bytes, unescape("ab\\t\\n\x1b$").unwrap());
+    assert_eq!(bytes, unescape_bash(r#"ab\\t\\n\033$"#).unwrap());
 }
 
 #[test]
 fn test_escape() {
-    let v = unescape("0x61625c745c6e1b24").unwrap();
+    let bytes: &[u8] = &[97, 98, 92, 116, 92, 110, 27, 36];
 
     let mut repr = String::new();
-    escape_bytes_hex(v.as_slice(), &mut repr).unwrap();
+    escape_bytes_hex(bytes, &mut repr).unwrap();
     assert_eq!("61625c745c6e1b24", repr);
 
     let mut repr = String::new();
-    escape_bytes_base64(v.as_slice(), &mut repr).unwrap();
+    escape_bytes_base64(bytes, &mut repr).unwrap();
     assert_eq!("YWJcdFxuGyQ=", repr);
 
     let mut repr = String::new();
-    escape_bytes_octal(v.as_slice(), &mut repr, false).unwrap();
+    escape_bytes_bash(bytes, &mut repr, false).unwrap();
     assert_eq!(r#"ab\\t\\n\033$"#, repr);
 }
