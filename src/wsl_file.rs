@@ -12,7 +12,7 @@ use windows::Win32::System::WindowsProgramming::RtlFreeUnicodeString;
 use windows::Win32::System::IO::IO_STATUS_BLOCK;
 use windows::Wdk::Foundation::{NtClose, OBJECT_ATTRIBUTES};
 
-use windows::Win32::System::Kernel::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_DEVICEMAP};
+use windows::Win32::Foundation::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_DEVICEMAP};
 
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
@@ -148,7 +148,7 @@ pub unsafe fn open_file_inner(wsl_file: &mut WslFile, writable: bool) -> Result<
     oa.Length = size_of::<OBJECT_ATTRIBUTES>() as u32;
     oa.ObjectName = &wsl_file.full_path as *const _;
     // donot use OBJ_DONT_REPARSE as it will stop at C:
-    oa.Attributes = (OBJ_CASE_INSENSITIVE | OBJ_IGNORE_IMPERSONATED_DEVICEMAP) as u32;
+    oa.Attributes = OBJ_CASE_INSENSITIVE | OBJ_IGNORE_IMPERSONATED_DEVICEMAP;
 
     let desire_access = if writable {
          // includes the required FILE_READ_EA and FILE_WRITE_EA access_mask!

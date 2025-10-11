@@ -5,7 +5,7 @@ pub fn is_unix_absolute<P: AsRef<Path>>(path: P) -> bool {
     path.as_ref().starts_with("/")
 }
 
-pub fn try_get_abs_path_prefix(abs_path: &Path) -> Option<Prefix> {
+pub fn try_get_abs_path_prefix<'a>(abs_path: &'a Path) -> Option<Prefix<'a>> {
     if let Some(Component::Prefix(ref prefix)) = abs_path.components().nth(0) {
         Some(prefix.kind())
     } else {

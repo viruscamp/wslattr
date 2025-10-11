@@ -10,6 +10,7 @@ use windows::Win32::System::IO::{DeviceIoControl, IO_STATUS_BLOCK};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile, REPARSE_GUID_DATA_BUFFER};
 use windows::Win32::System::Ioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
 use windows::Win32::Foundation::GetLastError;
+use windows::core::Free;
 
 /// `NtQueryEaFile` can read known EA's, but there are 'LX.LINUX.ATTR.*', so we'd read all.
 pub unsafe fn read_ea_all(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
@@ -236,16 +237,10 @@ pub fn error_msg_ntdll(msgid: u32) -> windows::core::Result<String> {
 
         if size > 0 {
             let message_string_result = lp_allocated_buffer.to_string();
-            let hresult = LocalFree(HLOCAL(lp_allocated_buffer.as_ptr() as _));
-            if hresult.0 == 0 as _ {
-                return Ok(message_string_result?);
-            } else {
-                return Err(Error::from_win32());
-            }
+            HLOCAL(lp_allocated_buffer.as_ptr() as _).free();
+            return Ok(message_string_result?);
         } else {
-            let format_message_err = GetLastError();
-            eprintln!("{:?}", format_message_err);
-            return Err(Error::from_win32());
+            return Err(Error::from_thread());
         }
     }
 }
