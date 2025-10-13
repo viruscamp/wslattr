@@ -135,7 +135,7 @@ pub fn chmod_all(mut mode: u32, mode_strs: &str) -> Result<u32, ()> {
 /// o +- t
 /// +- t
 pub fn chmod_part(mut mode: u32, mode_str: &str) -> Result<u32, ()> {
-    use regex::Regex;
+    use regex_lite::Regex;
     use std::sync::LazyLock;
 
     static MODE_PATTERN: LazyLock<Regex> = LazyLock::new(|| 

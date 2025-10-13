@@ -167,7 +167,7 @@ pub unsafe fn read_data(file_handle: HANDLE) -> Result<Vec<u8>> {
         file_handle,
         Some(buf.as_mut()),
         Some(&mut read_size),
-        None,        
+        None,
     ) {
         println!("[ERROR] ReadFile: {}, Cannot read symlink from file content\n", &err);
         return Err(err.into());
