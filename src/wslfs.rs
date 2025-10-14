@@ -113,7 +113,7 @@ impl<Bytes: AsRef<[u8]>> LxDotAttr<Bytes> {
 }
 
 impl<'a> WslfsParsed<'a> {
-    pub fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>) -> Self {
+    pub fn load<'b: 'a, 'c, Bytes: AsRef<[u8]>>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntry<Bytes>>>) -> Self {
         let mut p = Self::default();
 
         p.reparse_tag = wsl_file.reparse_tag.map(WslfsReparseTag::from_tag_id);
@@ -125,19 +125,19 @@ impl<'a> WslfsParsed<'a> {
 
         if let Some(ea_parsed) = ea_parsed {
             for ea in ea_parsed {
-                if ea.name == LXUID.as_bytes() {
-                    p.lxuid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-                } else if ea.name == LXGID.as_bytes() {
-                    p.lxgid = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-                } else if ea.name == LXMOD.as_bytes() {
-                    p.lxmod = Some(Cow::Owned(ea.get_ea::<u32>().to_owned()));
-                } else if ea.name == LXDEV.as_bytes() {
-                    p.lxdev = Some(Cow::Owned(ea.get_ea::<Lxdev>().to_owned()));
-                } else if ea.name.starts_with(LX_DOT.as_bytes()) {
+                if ea.name.as_ref() == LXUID.as_bytes() {
+                    p.lxuid = Some(ea.get_ea());
+                } else if ea.name.as_ref() == LXGID.as_bytes() {
+                    p.lxgid = Some(ea.get_ea());
+                } else if ea.name.as_ref() == LXMOD.as_bytes() {
+                    p.lxmod = Some(ea.get_ea());
+                } else if ea.name.as_ref() == LXDEV.as_bytes() {
+                    p.lxdev = Some(ea.get_ea());
+                } else if ea.name.as_ref().starts_with(LX_DOT.as_bytes()) {
                     p.lx_dot_ea.push(LxDotAttr(EaEntryCow {
                         flags: ea.flags,
-                        name: ea.name.to_owned().into(),
-                        value: ea.value.to_owned().into(),
+                        name: ea.name.as_ref().to_owned().into(),
+                        value: ea.value.as_ref().to_owned().into(),
                     }));
                 }
             }

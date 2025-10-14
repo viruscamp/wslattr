@@ -1,4 +1,6 @@
-use std::{borrow::Cow, mem::{offset_of, transmute}, ptr::{null, slice_from_raw_parts}};
+use std::borrow::Cow;
+use std::mem::{offset_of, transmute};
+use std::ptr::{null, read_unaligned, slice_from_raw_parts};
 
 use windows::Wdk::Storage::FileSystem::FILE_FULL_EA_INFORMATION;
 
@@ -12,15 +14,23 @@ pub struct EaEntry<Bytes: AsRef<[u8]>> {
 }
 
 impl<Bytes: AsRef<[u8]>> EaEntry<Bytes> {
+    pub fn get_ea<T: Sized + Copy>(&'_ self) -> Cow<'_, T> {
+        force_cast(self.value.as_ref())
+    }
+
     fn size(&self) -> usize {
         ea_entry_size_inner(self.name.as_ref().len() as u8, self.value.as_ref().len() as u16)
     }
 }
 
-pub fn force_cast<T: Sized>(buf: &[u8]) -> &T {
+pub fn force_cast<T: Sized + Copy>(buf: &'_ [u8]) -> Cow<'_, T> {
     assert!(buf.len() >= size_of::<T>());
     let data = buf.as_ptr();
-    unsafe { &* (data as *const T) }
+    if (data as usize) % align_of::<T>() != 0 {
+        unsafe { std::borrow::Cow::Owned(read_unaligned(data as *const T)) }
+    } else {
+        unsafe { std::borrow::Cow::Borrowed(&*(data as *const T)) }
+    }
 }
 
 pub fn get_buffer<T: Sized>(t: &T) -> &[u8] {
@@ -30,15 +40,9 @@ pub fn get_buffer<T: Sized>(t: &T) -> &[u8] {
 
 pub type EaEntryRaw<'a> = EaEntry<&'a [u8]>;
 
-impl<'a> EaEntryRaw<'a> {
-    pub fn get_ea<T: Sized>(&self) -> &T {
-        force_cast(&self.value)
-    }
-}
-
 pub type EaEntryCow<'a> = EaEntry<Cow<'a, [u8]>>;
 
-//pub type EaEntryOwned = EaEntry<[u8]>;
+pub type EaEntryOwned = EaEntry<Vec<u8>>;
 
 /// 12, aligned size, could not be used
 #[allow(dead_code)] 
@@ -104,6 +108,7 @@ pub fn parse_ea_to_iter(buffer: &[u8]) -> impl Iterator<Item = EaEntry<&[u8]>> {
                 let pname = &pea.EaName as *const i8 as *const u8;
                 let name = &*slice_from_raw_parts(pname, pea.EaNameLength as usize);
 
+                // not aligned, can not be dereferenced directly
                 let pvalue =  pname.add(pea.EaNameLength as usize + 1);
                 let value = &*slice_from_raw_parts(pvalue, pea.EaValueLength as usize);
 

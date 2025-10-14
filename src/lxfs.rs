@@ -5,7 +5,7 @@ use std::ptr::{addr_of, slice_from_raw_parts};
 use windows::Wdk::Storage::FileSystem::FILE_BASIC_INFORMATION;
 
 use crate::distro::{Distro, FsType};
-use crate::ea_parse::{force_cast, EaEntry, EaEntryRaw};
+use crate::ea_parse::{EaEntry, EaEntryRaw};
 use crate::posix::{lsperms, StModeType, DEFAULT_MODE};
 use crate::ntfs_io::read_data;
 use crate::time_utils::{u64_to_lxfs_time, LxfsTime}; 
@@ -82,25 +82,25 @@ pub const fn make_dev(ma: u32, mi: u32) -> u32 {
 }
 
 impl<'a> LxfsParsed<'a> {
-    pub fn load<'b: 'a, 'c>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntryRaw<'a>>>)-> Self {
+    pub fn load<'b: 'a, 'c, Bytes: AsRef<[u8]>>(wsl_file: &'c WslFile, ea_parsed: &'b Option<Vec<EaEntry<Bytes>>>)-> Self {
         let mut p = Self::default();
         p.basic_file_info = wsl_file.basic_file_info;
 
         if let Some(ea_parsed) = ea_parsed {
-            for EaEntry { name, value, flags: _ } in ea_parsed {
-                let name = name.as_ref();
+            for ea_entry in ea_parsed {
+                let name = ea_entry.name.as_ref();
                 if name == LXATTRB.as_bytes() {
-                    p.lxattrb = Some(Cow::Borrowed(force_cast(value.as_ref())));
+                    p.lxattrb = Some(ea_entry.get_ea());
                     
                     if let Some(mode) = p.get_mode() {
                         if StModeType::from_mode(mode) == StModeType::LNK {
-                            let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();                
+                            let buf = unsafe { read_data(wsl_file.file_handle) }.unwrap();
                             let symlink = String::from_utf8(buf).unwrap();
                             p.symlink = Some(symlink);
                         }
                     }
                 } else if name == LXXATTR.as_bytes() {
-                    let lxxattr_parsed = unsafe { parse_lxxattr(value.as_ref()) };
+                    let lxxattr_parsed = unsafe { parse_lxxattr(ea_entry.value.as_ref()) };
                     p.lxxattr = Some(lxxattr_parsed);
                 }
             }
