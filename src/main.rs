@@ -1,5 +1,6 @@
 #![cfg_attr(debug_assertions, allow(dead_code, unused_imports, unused_variables, unused_mut))]
 
+use std::fmt::Write;
 use std::path::{absolute, Path, PathBuf};
 use clap::{arg, command, Parser, Subcommand};
 
@@ -61,7 +62,9 @@ struct ArgsChange {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// View WSL1 releated file info from windows
     View(ArgsView),
+    /// Change user ownership of a files or a directory
     Chown {
         /// uid or user name(with valid distro)
         user: String,
@@ -69,6 +72,7 @@ enum Command {
         #[clap(flatten)]        
         args_change: ArgsChange,
     },
+    /// Change group ownership of a files or a directory
     Chgrp {
         /// gid or group name(with valid distro)
         group: String,
@@ -76,6 +80,7 @@ enum Command {
         #[clap(flatten)]
         args_change: ArgsChange,
     },
+    /// Change the access permissions of a file or directory
     Chmod {
         /// posix modes string, "0844", "u+x,g-t"
         modes: String,
@@ -83,6 +88,7 @@ enum Command {
         #[clap(flatten)]
         args_change: ArgsChange,
     },
+    /// Set extended file attributes.
     SetAttr {
         #[arg(long, short)]
         name: String,
@@ -93,6 +99,7 @@ enum Command {
         #[clap(flatten)]
         args_change: ArgsChange,
     },
+    /// Remove a specific attribute of a file
     RmAttr {
         #[arg(long, short)]
         name: String,
@@ -100,8 +107,9 @@ enum Command {
         #[clap(flatten)]
         args_change: ArgsChange,
     },
+    /// Reserve operation of 'wslconfig /upgrade', convert a WSL1 distro from 'wslfs' to 'lxfs'
     Downgrade {
-        /// file to change
+        /// distro install path
         #[clap(conflicts_with("distro"))]
         path: Option<PathBuf>,
 
@@ -110,6 +118,7 @@ enum Command {
         #[arg(long, short)]
         distro: Option<String>,
     },
+    /// set raw ntfs EA, dangeruos
     SetEa {
         /// file to change
         path: PathBuf,
@@ -119,6 +128,14 @@ enum Command {
     
         #[arg(long, short)]
         value: Option<String>,
+    },
+    /// get raw ntfs EA
+    GetEa {
+        /// file to view
+        path: PathBuf,
+
+        #[arg(long, short)]
+        name: Option<String>,
     },
 }
 
@@ -172,6 +189,10 @@ fn main() {
                 let value_bytes = value.map(|v| escape_utils::unescape(&v).expect("invalid value"));
                 set_ea(wsl_file.file_handle, name.as_bytes(), value_bytes.as_ref().map(|v| v.as_slice()));
             },
+            GetEa { path, name } => {
+                let mut wsl_file = unsafe { open_handle(&path, true) }.unwrap();
+                get_ea(&mut wsl_file, name);
+            }
         }
 
     } else if let Some(args_view) = args.args_view {
@@ -373,15 +394,6 @@ fn test_ea_write(ea_buffer: &Option<Vec<u8>>, ea_parsed: &Option<Vec<EaEntry<&[u
 
         println!("read_ea_len={} out_ea_len={}", ea_buffer.len(), ea_out.buffer.len());
         assert_eq!(ea_buffer, &ea_out.buffer);
-    }
-}
-
-fn set_ea(file_handle: HANDLE, name: &[u8], value: Option<&[u8]>) {
-    // add, change, delete
-    let mut ea_out = EaOut::default();
-    ea_out.add(name, value.unwrap_or(&[0;0]));
-    unsafe {
-        let _ = ntfs_io::write_ea(file_handle, &ea_out.buffer);
     }
 }
 
@@ -605,5 +617,33 @@ fn print_file_time(wsl_file: &WslFile) {
         println!("{:28}{}", "ChangeTime:", change_time);
     } else {
         println!("[ERROR] cannot query file times")
+    }
+}
+
+fn set_ea(file_handle: HANDLE, name: &[u8], value: Option<&[u8]>) {
+    // add, change, delete
+    let mut ea_out = EaOut::default();
+    ea_out.add(name, value.unwrap_or(&[0;0]));
+    unsafe {
+        let _ = ntfs_io::write_ea(file_handle, &ea_out.buffer);
+    }
+}
+
+fn get_ea(wsl_file: &mut WslFile, name: Option<String>) {
+    let ea_buffer = wsl_file.read_ea().unwrap_or(None);
+
+    if let Some(ea_buffer) = ea_buffer {
+        let ea_parsed = ea_parse::parse_ea(&ea_buffer);
+        println!("EAs count: {}", ea_parsed.len());
+        for ea_entry in ea_parsed {
+            let ea_name = String::from_utf8_lossy(ea_entry.name.as_ref());
+            let bytes = ea_entry.value;
+            let mut out = String::with_capacity(bytes.len() + 16);
+            write!(&mut out, "0x").unwrap();
+            crate::escape_utils::escape_bytes_hex(bytes, &mut out).unwrap();
+            println!("  EA:{} = {}", ea_name, out);
+        }
+    } else {
+        println!("no EAs exists");
     }
 }

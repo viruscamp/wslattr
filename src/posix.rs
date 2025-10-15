@@ -143,10 +143,8 @@ pub fn chmod_part(mut mode: u32, mode_str: &str) -> Result<u32, ()> {
     );
 
     if let Some(c) = MODE_PATTERN.captures(mode_str) {
-        let found: (&str, [&str; 3]) = c.extract();
-        let whoes = found.1[0];
-        let act = found.1[1].chars().nth(0).unwrap();
-        let whats = found.1[2];
+        let (full, [whoes, actions, whats]) = c.extract();
+        let act = actions.chars().nth(0).unwrap();
         if whoes == "" && whats == "t" {
             mode = chmod_bit(mode, 'o', act, 't');
         } else {
@@ -206,41 +204,30 @@ fn line_parse(line: &str) -> Result<(String, u32), ()> {
 }
 
 // name:x:uid:gid
-#[derive(Debug)]
-pub struct User {
-    pub name: String,
-    pub uid: u32,
-}
-
-pub fn load_users(rootfs: &Path) -> Option<Vec<User>> {
-    let file = File::open(rootfs.join("etc/passwd")).ok()?;
-    let reader = BufReader::new(file);
-
-    let users = reader.lines()
-    .filter_map(|l| l.ok())
-    .filter_map(|l| line_parse(&l).ok())
-    .map(|(name, uid)| User { name, uid } )
-    .collect();
-
-    Some(users)
-}
-
 // name:x:gid
 #[derive(Debug)]
-pub struct Group {
+pub struct PosixIdentifier {
     pub name: String,
-    pub gid: u32,
+    pub id: u32,
 }
 
-pub fn load_groups(rootfs: &Path) -> Option<Vec<Group>> {
-    let file = File::open(rootfs.join("etc/group")).ok()?;
+pub fn load_users(rootfs: &Path) -> Option<Vec<PosixIdentifier>> {
+    load_posix_id_from_file(rootfs, "etc/passwd")
+}
+
+pub fn load_groups(rootfs: &Path) -> Option<Vec<PosixIdentifier>> {
+    load_posix_id_from_file(rootfs, "etc/group")
+}
+
+pub fn load_posix_id_from_file(rootfs: &Path, filename: impl AsRef<Path>) -> Option<Vec<PosixIdentifier>> {
+    let file = File::open(rootfs.join(filename)).ok()?;
     let reader = BufReader::new(file);
 
-    let groups = reader.lines()
-    .filter_map(|l| l.ok())
-    .filter_map(|l| line_parse(&l).ok())
-    .map(|(name, gid)| Group { name, gid } )
-    .collect();
+    let ids = reader.lines()
+        .filter_map(|l| l.ok())
+        .filter_map(|l| line_parse(&l).ok())
+        .map(|(name, id)| PosixIdentifier { name, id } )
+        .collect();
 
-    Some(groups)
+    Some(ids)
 }

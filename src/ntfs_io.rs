@@ -3,14 +3,28 @@ use std::mem::{offset_of, transmute};
 use std::io::{Error, Result};
 use std::ptr::{addr_of, null_mut};
 
-use windows::core::{PCSTR, PWSTR};
-use windows::Win32::Foundation::{LocalFree, ERROR_MORE_DATA, HANDLE, HLOCAL, MAX_PATH, WIN32_ERROR};
+use windows::core::{HRESULT, PCSTR, PWSTR};
+use windows::Win32::Foundation::{ERROR_MORE_DATA, HANDLE, HLOCAL, LocalFree, MAX_PATH, NTSTATUS, WIN32_ERROR};
 use windows::Wdk::Storage::FileSystem::{FileBasicInformation, FileEaInformation, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, FILE_BASIC_INFORMATION, FILE_EA_INFORMATION, REPARSE_DATA_BUFFER};
 use windows::Win32::System::IO::{DeviceIoControl, IO_STATUS_BLOCK};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile, REPARSE_GUID_DATA_BUFFER};
 use windows::Win32::System::Ioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
 use windows::Win32::Foundation::GetLastError;
 use windows::core::Free;
+
+pub trait ToIoError {
+    fn to_io_error(self) -> std::io::Error;
+}
+impl ToIoError for HRESULT {
+    fn to_io_error(self) -> std::io::Error {
+        std::io::Error::from_raw_os_error(self.0)
+    }
+}
+impl ToIoError for NTSTATUS {
+    fn to_io_error(self) -> std::io::Error {
+        std::io::Error::from_raw_os_error(self.to_hresult().0)
+    }
+}
 
 /// `NtQueryEaFile` can read known EA's, but there are 'LX.LINUX.ATTR.*', so we'd read all.
 pub unsafe fn read_ea_all(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
@@ -27,7 +41,7 @@ pub unsafe fn read_ea_all(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
     );    
     if nt_status.is_err() {
         println!("[ERROR] NtQueryInformationFile: {:#x}", nt_status.0);
-        return Err(Error::from_raw_os_error(nt_status.0));
+        return Err(nt_status.to_io_error());
     }
     if ea_info.EaSize == 0 {
         return Ok(None);
@@ -48,7 +62,7 @@ pub unsafe fn read_ea_all(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
     );
     if nt_status.is_err() {
         println!("[ERROR] NtQueryEaFile: {:#x}", nt_status.0);
-        return Err(Error::from_raw_os_error(nt_status.0));
+        return Err(nt_status.to_io_error());
     }
 
     return Ok(Some(buf));
@@ -59,13 +73,13 @@ pub unsafe fn write_ea(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
     let mut isb = IO_STATUS_BLOCK::default();
     let nt_status = NtSetEaFile(
         file_handle,
-        transmute(&mut isb), 
+        transmute(&mut isb),
         transmute(buf.as_ptr()),
         buf.len() as u32,
     );
     if nt_status.is_err() {
         println!("[ERROR] NtSetEaFile: {:#x}", nt_status.0);
-        return Err(Error::from_raw_os_error(nt_status.0));
+        return Err(nt_status.to_io_error());
     }
     Ok(())
 }

@@ -17,7 +17,7 @@ use windows::Win32::Foundation::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_D
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
 use crate::distro::FsType;
-use crate::ntfs_io::{query_file_basic_infomation, read_ea_all};
+use crate::ntfs_io::{ToIoError, query_file_basic_infomation, read_ea_all};
 
 pub trait WslFileAttributes<'a> {
     fn fs_type(&self) -> FsType;
@@ -103,7 +103,7 @@ pub unsafe fn open_handle(path: &Path, writable: bool) -> Result<WslFile> {
     );
     if nt_status.is_err() {
         println!("[ERROR] RtlDosPathNameToNtPathName_U_WithStatus: {:#x}", &nt_status.0);
-        return Err(Error::from_raw_os_error(nt_status.0));
+        return Err(nt_status.to_io_error());
     }
     wsl_file.full_path = full_path;
 
@@ -183,13 +183,12 @@ pub unsafe fn open_file_inner(wsl_file: &mut WslFile, writable: bool) -> Result<
             if nt_status.is_err() {
                 println!("[ERROR] NtOpenFile: {:#x} , open as REPARSE_POINT", nt_status.0);
                 //println!("{}", error_msg_ntdll(nt_status.0 as u32).unwrap());
-                return Err(Error::from_raw_os_error(nt_status.0));
+                return Err(nt_status.to_io_error());
             }
             return Ok(OpenFileType::ReparsePoint);
         } else {
             println!("[ERROR] NtOpenFile: {:#x}", nt_status.0);
-            //println!("{}", error_msg_ntdll(nt_status.0 as u32).unwrap());
-            return Err(Error::from_raw_os_error(nt_status.0));
+            return Err(nt_status.to_io_error());
         }
     }
     return Ok(OpenFileType::Normal);

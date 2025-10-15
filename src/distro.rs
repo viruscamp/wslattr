@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use clap::ValueEnum;
 use windows_registry::{Key, CURRENT_USER};
 
-use crate::posix::{load_groups, load_users, Group, User};
+use crate::posix::{load_groups, load_users, PosixIdentifier};
 use crate::path_utils::{is_path_prefix_disk, normalize_path, try_get_abs_path_prefix, try_get_distro_from_unc_path};
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -33,8 +33,8 @@ pub struct Distro {
 
     pub source: DistroSource,
 
-    pub users: Option<Vec<User>>,
-    pub groups: Option<Vec<Group>>,
+    pub users: Option<Vec<PosixIdentifier>>,
+    pub groups: Option<Vec<PosixIdentifier>>,
 }
 
 const REG_LXSS: &'static str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss";
@@ -176,7 +176,7 @@ impl Distro {
         self.users.as_ref()
         .and_then(|users|
             users.iter()
-            .find(|u| u.name == user_name).and_then(|u| Some(u.uid))
+            .find(|u| u.name == user_name).and_then(|u| Some(u.id))
         )
     }
 
@@ -184,7 +184,7 @@ impl Distro {
         self.groups.as_ref()
         .and_then(|groups|
             groups.iter()
-            .find(|u| u.name == group_name).and_then(|u| Some(u.gid))
+            .find(|u| u.name == group_name).and_then(|u| Some(u.id))
         )
     }
 
@@ -192,7 +192,7 @@ impl Distro {
         self.users.as_ref()
         .and_then(|users|
             users.iter()
-            .find(|u| u.uid == uid).and_then(|u| Some(u.name.as_str()))
+            .find(|u| u.id == uid).and_then(|u| Some(u.name.as_str()))
         )
     }
 
@@ -200,7 +200,7 @@ impl Distro {
         self.groups.as_ref()
         .and_then(|groups|
             groups.iter()
-            .find(|u| u.gid == gid).and_then(|u| Some(u.name.as_str()))
+            .find(|u| u.id == gid).and_then(|u| Some(u.name.as_str()))
         )
     }
 }
