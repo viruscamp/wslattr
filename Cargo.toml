@@ -1,22 +1,23 @@
 [package]
 name = "wslattr"
-version = "0.1.1"
+version = "0.1.3"
 edition = "2021"
 
 [dependencies]
 base64 = "0.22"
-clap = { version = "4.5", features = ['derive'] }
-dunce = "1"
-normpath = "1"
-regex-lite = "*"
+clap = { version = "4.5", features = ["derive"] }
+dunce = "1.0"
+normpath = "1.5"
+regex-lite = "0.1"
 #regex= "1.12"
-time = { version = "0.3", features = ['formatting'] }
+time = { version = "0.3", features = ["formatting"] }
 walkdir = "2.5"
 windows-registry = "0.6"
 
 [dependencies.windows]
 version = "0.62"
 features = [
+    "std",
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Win32_System_LibraryLoader",
