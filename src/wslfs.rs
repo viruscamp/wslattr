@@ -8,7 +8,7 @@ use crate::distro::{Distro, FsType};
 use crate::ea_parse::{EaEntry, EaEntryCow, EaEntryRaw};
 use crate::ntfs_io::{delete_reparse_point, write_reparse_point};
 use crate::posix::{lsperms, StModeType};
-use crate::wsl_file::{open_file_inner, WslFile, WslFileAttributes};
+use crate::wsl_file::{WslFile, WslFileAttributes};
 
 pub const LXUID: &'static str = "$LXUID";
 pub const LXGID: &'static str = "$LXGID";
@@ -397,7 +397,7 @@ pub unsafe fn delete_wslfs_reparse_point(wsl_file: &mut WslFile) -> Result<()> {
     assert!(wsl_file.reparse_tag.is_some());
     delete_reparse_point(wsl_file.file_handle, wsl_file.reparse_tag.unwrap())?;
     wsl_file.reparse_tag = None;
-    open_file_inner(wsl_file, true)?; // open as normal file
+    wsl_file.reopen_to_write()?; // open as normal file
     Ok(())
 }
 

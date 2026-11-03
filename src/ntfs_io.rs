@@ -3,11 +3,12 @@ use std::mem::{offset_of, transmute};
 use std::io::{Error, Result};
 use std::ptr::{addr_of, null_mut};
 
+use windows::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows::core::{HRESULT, PCSTR, PWSTR};
-use windows::Win32::Foundation::{ERROR_MORE_DATA, HANDLE, HLOCAL, LocalFree, MAX_PATH, NTSTATUS, WIN32_ERROR};
-use windows::Wdk::Storage::FileSystem::{FileBasicInformation, FileEaInformation, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, FILE_BASIC_INFORMATION, FILE_EA_INFORMATION, REPARSE_DATA_BUFFER};
+use windows::Win32::Foundation::{ERROR_MORE_DATA, HANDLE, HLOCAL, LocalFree, MAX_PATH, NTSTATUS, OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_DEVICEMAP, STATUS_IO_REPARSE_TAG_NOT_HANDLED, STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING, WIN32_ERROR};
+use windows::Wdk::Storage::FileSystem::{FILE_BASIC_INFORMATION, FILE_EA_INFORMATION, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, FileBasicInformation, FileEaInformation, NtOpenFile, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, REPARSE_DATA_BUFFER};
 use windows::Win32::System::IO::{DeviceIoControl, IO_STATUS_BLOCK};
-use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile, REPARSE_GUID_DATA_BUFFER};
+use windows::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, REPARSE_GUID_DATA_BUFFER, ReadFile, WriteFile};
 use windows::Win32::System::Ioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
 use windows::Win32::Foundation::GetLastError;
 use windows::core::Free;
@@ -24,6 +25,66 @@ impl ToIoError for NTSTATUS {
     fn to_io_error(self) -> std::io::Error {
         Into::<windows::core::Error>::into(self).into()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenFileType {
+    Normal,
+    ReparsePoint,
+}
+
+pub unsafe fn open_file(file_path: &UNICODE_STRING, writable: bool) -> Result<(HANDLE, OpenFileType)> {
+    let mut isb = IO_STATUS_BLOCK::default();
+    let mut oa = OBJECT_ATTRIBUTES::default();
+
+    oa.Length = size_of::<OBJECT_ATTRIBUTES>() as u32;
+    oa.ObjectName = file_path as *const _;
+    // donot use OBJ_DONT_REPARSE as it will stop at C:
+    oa.Attributes = OBJ_CASE_INSENSITIVE | OBJ_IGNORE_IMPERSONATED_DEVICEMAP;
+
+    let desire_access = if writable {
+         // includes the required FILE_READ_EA and FILE_WRITE_EA access_mask!
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE
+    } else {
+         // includes the required FILE_READ_EA access_mask!
+        FILE_GENERIC_READ
+    };
+    let share_access = if writable {
+        FILE_SHARE_READ | FILE_SHARE_WRITE
+    } else {
+        FILE_SHARE_READ
+    };
+    let mut file_handle = HANDLE::default();
+    let nt_status = NtOpenFile(
+        &mut file_handle,
+        desire_access.0,
+        &mut oa,
+        &mut isb,
+        share_access.0,
+        FILE_SYNCHRONOUS_IO_NONALERT.0,
+    );
+    if nt_status.is_err() {
+        if nt_status == STATUS_IO_REPARSE_TAG_NOT_HANDLED || nt_status == STATUS_REPARSE_POINT_ENCOUNTERED {
+            let nt_status = NtOpenFile(
+                &mut file_handle,
+                desire_access.0,
+                &mut oa,
+                &mut isb,
+                share_access.0,
+                FILE_SYNCHRONOUS_IO_NONALERT.0 | FILE_OPEN_REPARSE_POINT.0
+            );
+            if nt_status.is_err() {
+                println!("[ERROR] NtOpenFile: {:#x} , open as REPARSE_POINT", nt_status.0);
+                //println!("{}", error_msg_ntdll(nt_status.0 as u32).unwrap());
+                return Err(nt_status.to_io_error());
+            }
+            return Ok((file_handle, OpenFileType::ReparsePoint));
+        } else {
+            println!("[ERROR] NtOpenFile: {:#x}", nt_status.0);
+            return Err(nt_status.to_io_error());
+        }
+    }
+    return Ok((file_handle, OpenFileType::Normal));
 }
 
 /// `NtQueryEaFile` can read known EA's, but there are 'LX.LINUX.ATTR.*', so we'd read all.

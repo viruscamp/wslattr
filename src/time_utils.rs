@@ -121,7 +121,7 @@ pub fn u64_to_lxfs_time(t64: u64) -> LxfsTime {
 pub const FILE_TIME_FORMAT_STR: &'static str = "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:7] UTC";
 
 pub static FILE_TIME_FORMAT: LazyLock<Vec<format_description::FormatItem<'static>>> = LazyLock::new(|| {
-    format_description::parse(FILE_TIME_FORMAT_STR).unwrap()
+    format_description::parse_borrowed::<1>(FILE_TIME_FORMAT_STR).unwrap()
 });
 
 #[test]

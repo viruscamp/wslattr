@@ -600,6 +600,7 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
     // 4. symlink files, write file content
     if let Some(ref symlink) = wslfs.symlink {
         unsafe {
+            let _ = wsl_file.reopen_to_write();
             let _ = write_data(wsl_file.file_handle, symlink.as_bytes());
         }
     }

@@ -1,6 +1,8 @@
 use std::fs::File; 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::sync::LazyLock;
+use regex_lite::Regex;
 
 pub const ST_MODE_TYPE_FIFO: u32 = 0o_0010000;
 pub const ST_MODE_TYPE_CHR:  u32 = 0o_0020000;
@@ -135,9 +137,6 @@ pub fn chmod_all(mut mode: u32, mode_strs: &str) -> Result<u32, ()> {
 /// o +- t
 /// +- t
 pub fn chmod_part(mut mode: u32, mode_str: &str) -> Result<u32, ()> {
-    use regex_lite::Regex;
-    use std::sync::LazyLock;
-
     static MODE_PATTERN: LazyLock<Regex> = LazyLock::new(|| 
         Regex::new(r"^([ugoa]?)([+-])([rwxst]+)$").unwrap()
     );

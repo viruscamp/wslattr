@@ -17,7 +17,7 @@ use windows::Win32::Foundation::{OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_D
 use windows::Win32::Storage::FileSystem::{FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE};
 
 use crate::distro::FsType;
-use crate::ntfs_io::{ToIoError, query_file_basic_infomation, read_ea_all};
+use crate::ntfs_io::{OpenFileType, ToIoError, open_file, query_file_basic_infomation, read_ea_all};
 
 pub trait WslFileAttributes<'a> {
     fn fs_type(&self) -> FsType;
@@ -68,9 +68,12 @@ impl WslFile {
     }
 
     pub fn reopen_to_write(&mut self) -> Result<()> {
-        assert!(!self.writable);
         self.close();
-        unsafe { open_file_inner(self, true)? };
+        unsafe { 
+            let (file_handle, open_file_type) = open_file(&mut self.full_path, true)?;
+            self.file_handle = file_handle;
+            self.writable = true;
+        };
         return Ok(());
     }
 
@@ -107,7 +110,9 @@ pub unsafe fn open_handle(path: &Path, writable: bool) -> Result<WslFile> {
     }
     wsl_file.full_path = full_path;
 
-    if let OpenFileType::ReparsePoint = open_file_inner(&mut wsl_file, writable)? {
+    let (file_handle, open_file_type) = open_file(&mut wsl_file.full_path, writable)?;
+    wsl_file.file_handle = file_handle;
+    if open_file_type == OpenFileType::ReparsePoint {
         let mut file_attribute_tag_info = FILE_ATTRIBUTE_TAG_INFO::default();
         if let Err(err) = GetFileInformationByHandleEx(
             wsl_file.file_handle,
@@ -127,11 +132,6 @@ pub unsafe fn open_handle(path: &Path, writable: bool) -> Result<WslFile> {
     return Ok(wsl_file);
 }
 
-pub enum OpenFileType {
-    Normal,
-    ReparsePoint,
-}
-
 extern "system" {
     fn RtlDosPathNameToNtPathName_U_WithStatus(
         DosFileName: PWSTR,
@@ -139,57 +139,4 @@ extern "system" {
         FilePart: *mut PWSTR,
         Reserved: *mut c_void,
     ) -> NTSTATUS;
-}
-
-pub unsafe fn open_file_inner(wsl_file: &mut WslFile, writable: bool) -> Result<OpenFileType> {
-    let mut isb = IO_STATUS_BLOCK::default();
-    let mut oa = OBJECT_ATTRIBUTES::default();
-
-    oa.Length = size_of::<OBJECT_ATTRIBUTES>() as u32;
-    oa.ObjectName = &wsl_file.full_path as *const _;
-    // donot use OBJ_DONT_REPARSE as it will stop at C:
-    oa.Attributes = OBJ_CASE_INSENSITIVE | OBJ_IGNORE_IMPERSONATED_DEVICEMAP;
-
-    let desire_access = if writable {
-         // includes the required FILE_READ_EA and FILE_WRITE_EA access_mask!
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE
-    } else {
-         // includes the required FILE_READ_EA access_mask!
-        FILE_GENERIC_READ
-    };
-    let share_access = if writable {
-        FILE_SHARE_READ | FILE_SHARE_WRITE
-    } else {
-        FILE_SHARE_READ
-    };
-    let nt_status = NtOpenFile(
-        &mut wsl_file.file_handle,
-        desire_access.0,
-        &mut oa,
-        &mut isb,
-        share_access.0,
-        FILE_SYNCHRONOUS_IO_NONALERT.0,
-    );
-    if nt_status.is_err() {
-        if nt_status == STATUS_IO_REPARSE_TAG_NOT_HANDLED || nt_status == STATUS_REPARSE_POINT_ENCOUNTERED {
-            let nt_status = NtOpenFile(
-                &mut wsl_file.file_handle,
-                desire_access.0,
-                &mut oa,
-                &mut isb,
-                share_access.0,
-                FILE_SYNCHRONOUS_IO_NONALERT.0 | FILE_OPEN_REPARSE_POINT.0
-            );
-            if nt_status.is_err() {
-                println!("[ERROR] NtOpenFile: {:#x} , open as REPARSE_POINT", nt_status.0);
-                //println!("{}", error_msg_ntdll(nt_status.0 as u32).unwrap());
-                return Err(nt_status.to_io_error());
-            }
-            return Ok(OpenFileType::ReparsePoint);
-        } else {
-            println!("[ERROR] NtOpenFile: {:#x}", nt_status.0);
-            return Err(nt_status.to_io_error());
-        }
-    }
-    return Ok(OpenFileType::Normal);
 }
