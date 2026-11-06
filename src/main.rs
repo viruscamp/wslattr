@@ -15,6 +15,8 @@ use windows::Win32::Foundation::HANDLE;
 use wsl_file::{open_handle, WslFile, WslFileAttributes};
 use wslfs::WslfsParsed;
 
+use crate::time_utils::u64_to_lxfs_time;
+
 mod distro;
 mod path_utils;
 mod wsl_file;
@@ -164,24 +166,31 @@ fn main() {
                     return;
                 }
                 if let Some(name) = distro {
-                    if let Some(mut d) = distro::try_load(&name) {
-                        if d.fs_type.is_none() {
-                            print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+                    match distro::try_load(&name) 
+                    {
+                        Ok(mut d) => {
+                            if d.fs_type.is_none() {
+                                print!("[ERROR] WSL distro: {} is WSL2", &d.name);
+                                return;
+                            }
+                            if d.fs_type == Some(FsType::Lxfs) {
+                                print!("[ERROR] WSL distro: {} is LxFs already", &d.name);
+                                return;
+                            }
+                            downgrade_distro(&mut d);
+                        },
+                        Err(e) => {
+                            println!("[ERROR] cannot load distro from arg: {}, error: {e:?}", name);
                             return;
                         }
-                        if d.fs_type == Some(FsType::Lxfs) {
-                            print!("[ERROR] WSL distro: {} is LxFs already", &d.name);
-                            return;
-                        }
-                        downgrade_distro(&mut d);
-                    } else {
-                        println!("[ERROR] there must be one of path or distro args");
-                        return;
                     }
                 } else if let Some(path) = path {
                     open_to_view(ArgsView { path, distro: None }, |mut wsl_file, _distro, wslfs, lxfs| {
                         downgrade(&mut wsl_file, &wslfs, &lxfs);
                     });
+                } else {
+                    println!("[ERROR] there must be one of path or distro args");
+                    return;
                 }
             },
             SetEa { path, name, value } => {
@@ -403,7 +412,7 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
         let distro_name = distro_name.as_ref();
         //println!("try load distro fron arg: {}", distro_name);
         let distro = distro::try_load(distro_name);
-        if let Some(mut d) = distro {
+        if let Ok(mut d) = distro {
             d.source = DistroSource::Arg;
             if d.fs_type.is_none() {
                 panic!("[ERROR] distro from arg: {} is WSL2", &d.name)
@@ -422,7 +431,7 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
         if !is_unix_absolute(in_path) && in_path.is_absolute() {
             //println!("try load distro fron file path: {}", in_path.display());
             let distro = distro::try_load_from_absolute_path(in_path);
-            if let Some(mut d) = distro {
+            if let Ok(mut d) = distro {
                 if d.fs_type.is_none() {
                     println!("[WARNING] distro: {} loaded from file path is WSL2, ignore it", &d.name);
                 } else {
@@ -434,7 +443,7 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
     }
 
     // try load distro fron current path
-    if let Some(mut d) = distro::try_load_from_current_dir() {
+    if let Ok(mut d) = distro::try_load_from_current_dir() {
         if d.fs_type.is_none() {
             println!("[WARNING] distro: {} loaded from current dir is WSL2, ignore it", &d.name);
         } else {
@@ -444,7 +453,7 @@ fn try_load_distro<S: AsRef<str>, P: AsRef<Path>>(arg_distro: Option<S>, path: O
     }
 
     // try load default WSL distro in registry
-    if let Some(d) = distro::try_load_from_reg_default() {
+    if let Ok(d) = distro::try_load_from_reg_default() {
         if d.fs_type.is_none() {
             println!("[WARNING] distro: {} loaded from default WSL distro in registry is WSL2, ignore it", &d.name);
         } else {
@@ -505,9 +514,9 @@ fn load_wsl_file(in_path: &Path, distro: Option<&Distro>) -> Option<WslFile> {
 }
 
 fn downgrade_distro(distro: &mut Distro) {
-    for entry in walkdir::WalkDir::new(&distro.base_path) {
+    for entry in walkdir::WalkDir::new(&distro.base_path.join("rootfs")) {
         if let Ok(entry) = entry {
-            if let Ok(_) = downgrade_path(&entry.path().join("rootfs")) {
+            if let Ok(_) = downgrade_path(&entry.path()){
                 println!("downgrade success: {}", entry.path().display());
             } else {
                 println!("downgrade failed: {}", entry.path().display());
@@ -516,7 +525,7 @@ fn downgrade_distro(distro: &mut Distro) {
     }
     match distro.set_fs_type(Some(FsType::Lxfs)) {
         Ok(_) => println!("downgrade success, set {} fs_type(Version) to 1", &distro.name),
-        Err(_) => println!("downgrade fail, set {} fs_type(Version) failed", &distro.name),
+        Err(err) => println!("downgrade fail, set {} fs_type(Version) failed: {}", &distro.name, err.message()),
     };
 }
 
@@ -608,13 +617,13 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
 
 fn print_file_time(wsl_file: &WslFile) {
     if let Some(fbi) = wsl_file.basic_file_info {
-        let creation_time: LxfsTime = (fbi.CreationTime as u64).into();
+        let creation_time = u64_to_lxfs_time(fbi.CreationTime as u64);
         println!("{:28}{}", "CreationTime:", creation_time);
-        let last_access_time: LxfsTime = (fbi.LastAccessTime as u64).into();
+        let last_access_time = u64_to_lxfs_time(fbi.LastAccessTime as u64);
         println!("{:28}{}", "LastAccessTime:", last_access_time);
-        let last_write_time: LxfsTime = (fbi.LastWriteTime as u64).into();
+        let last_write_time = u64_to_lxfs_time(fbi.LastWriteTime as u64);
         println!("{:28}{}", "LastWriteTime:", last_write_time);
-        let change_time: LxfsTime = (fbi.ChangeTime as u64).into();
+        let change_time = u64_to_lxfs_time(fbi.ChangeTime as u64);
         println!("{:28}{}", "ChangeTime:", change_time);
     } else {
         println!("[ERROR] cannot query file times")

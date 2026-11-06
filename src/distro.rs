@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
+use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows::core::{Error, HRESULT, Result};
 use windows_registry::{Key, CURRENT_USER};
 
 use crate::posix::{load_groups, load_users, PosixIdentifier};
@@ -51,17 +53,17 @@ const Flags: &str = "Flags";
 #[allow(non_upper_case_globals)]
 const Version: &str = "Version";
 
-pub fn try_load_from_reg_default() -> Option<Distro> {
-    let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
-    let default_distro_guid = lxss.get_string(DefaultDistribution).ok()?;
-    let mut d = try_load_from_reg_key(lxss.open(default_distro_guid).ok()?)?;
+pub fn try_load_from_reg_default() -> Result<Distro> {
+    let lxss = CURRENT_USER.open(REG_LXSS)?;
+    let default_distro_guid = lxss.get_string(DefaultDistribution)?;
+    let mut d = try_load_from_reg_key(lxss.open(default_distro_guid)?)?;
     d.source = DistroSource::Default;
-    return Some(d);
+    return Ok(d);
 }
 
-pub fn try_load_reg<S: AsRef<str>>(name: S) -> Option<Key> {
-    let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
-    lxss.keys().ok()?
+pub fn try_load_reg<S: AsRef<str>>(name: S) -> Result<Key> {
+    let lxss = CURRENT_USER.open(REG_LXSS)?;
+    lxss.keys()?
     .filter_map(|k| lxss.open(k).ok())
     .filter(|k| {
         if let Ok(s) = k.get_string(DistributionName) {
@@ -70,27 +72,27 @@ pub fn try_load_reg<S: AsRef<str>>(name: S) -> Option<Key> {
             false
         }
     })
-    .nth(0)
+    .nth(0).map_or_else(|| Err(ERROR_FILE_NOT_FOUND.to_hresult().into()), |x| Ok(x))
 }
 
-pub fn try_load<S: AsRef<str>>(name: S) -> Option<Distro> {
+pub fn try_load<S: AsRef<str>>(name: S) -> Result<Distro> {
     try_load_reg(name)
     .and_then(try_load_from_reg_key)
 }
 
-pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
+pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Result<Distro> {
     if let Some(n) = try_get_distro_from_unc_path(path.as_ref()) {
         return try_load(&n.to_string_lossy())
         .and_then(|mut x| {
             x.source = DistroSource::FilePathUNC;
-            Some(x)
+            Ok(x)
         });
     }
 
     if is_path_prefix_disk(&try_get_abs_path_prefix(path.as_ref())) {
-        let path = normalize_path(path.as_ref()).ok()?;
-        let lxss = CURRENT_USER.open(REG_LXSS).ok()?;
-        return lxss.keys().ok()?
+        let path = normalize_path(path.as_ref())?;
+        let lxss = CURRENT_USER.open(REG_LXSS)?;
+        return lxss.keys()?
         .filter_map(|k| lxss.open(k).ok())
         .filter(|k| {
             if let Ok(s) = k.get_string(BasePath) {
@@ -101,32 +103,38 @@ pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Option<Distro> {
             return false;
         })
         .nth(0)
-        .and_then(try_load_from_reg_key)
-        .map(|mut x| {
-            x.source = DistroSource::FilePathDisk;
-            x
-        });
+        .map_or_else(
+            || Err(ERROR_FILE_NOT_FOUND.to_hresult().into()), 
+            |k| {
+                let mut distro = try_load_from_reg_key(k)?;
+                distro.source = DistroSource::FilePathDisk;
+                Ok(distro)
+            }
+        );
     }
 
-    return None;
+    return Err(ERROR_FILE_NOT_FOUND.to_hresult().into());
 }
 
-pub fn try_load_from_current_dir() -> Option<Distro> {
-    std::env::current_dir().ok()
-    .and_then(try_load_from_absolute_path)
-    .map(|mut x| {
-        x.source = match x.source {
-            DistroSource::FilePathUNC => DistroSource::CurrentDirUNC,
-            DistroSource::FilePathDisk => DistroSource::CurrentDirDisk,
-            other => other,
-        };
-        x
-    })
+pub fn try_load_from_current_dir() -> Result<Distro> {
+    std::env::current_dir()
+    .map_or_else(
+        |_| Err(ERROR_FILE_NOT_FOUND.to_hresult().into()), 
+        |p| {
+            let mut distro = try_load_from_absolute_path(p)?;
+            distro.source = match distro.source {
+                DistroSource::FilePathUNC => DistroSource::CurrentDirUNC,
+                DistroSource::FilePathDisk => DistroSource::CurrentDirDisk,
+                other => other,
+            };
+            Ok(distro)
+        }
+    )
 }
 
-pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
-    let name: String = distro_key.get_string(DistributionName).ok()?;
-    let base_path: String = distro_key.get_string(BasePath).ok()?;
+pub fn try_load_from_reg_key(distro_key: Key) -> Result<Distro> {
+    let name: String = distro_key.get_string(DistributionName)?;
+    let base_path: String = distro_key.get_string(BasePath)?;
     let base_path = PathBuf::from(&base_path);
 
     // & 0x08 = 0 -> WSL1
@@ -149,7 +157,7 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
     let groups = load_groups(&base_path.join("rootfs"));
     let users = load_users(&base_path.join("rootfs"));
 
-    return Some(Distro {
+    return Ok(Distro {
         name,
         base_path,
         fs_type,
@@ -160,14 +168,15 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Option<Distro> {
 }
 
 impl Distro {
-    pub fn set_fs_type(&mut self, fs_type: Option<FsType>) -> Result<(), ()> {
-        try_load_reg(&self.name).map_or(Err(()), |k| {
+    pub fn set_fs_type(&mut self, fs_type: Option<FsType>) -> Result<()> {
+        try_load_reg(&self.name)
+        .and_then(|k| {
             match fs_type {
                 None => k.remove_value(Version),
                 Some(FsType::Lxfs) => k.set_u32(Version, FsType::Lxfs as u32),
                 Some(FsType::Wslfs) => k.set_u32(Version, FsType::Wslfs as u32),
-            }.map_err(|_| ())?;
-            self.fs_type = fs_type;            
+            }?;
+            self.fs_type = fs_type;
             Ok(())
         })
     }
@@ -176,7 +185,8 @@ impl Distro {
         self.users.as_ref()
         .and_then(|users|
             users.iter()
-            .find(|u| u.name == user_name).and_then(|u| Some(u.id))
+            .find(|u| u.name == user_name)
+            .and_then(|u| Some(u.id))
         )
     }
 
@@ -184,7 +194,8 @@ impl Distro {
         self.groups.as_ref()
         .and_then(|groups|
             groups.iter()
-            .find(|u| u.name == group_name).and_then(|u| Some(u.id))
+            .find(|u| u.name == group_name)
+            .and_then(|u| Some(u.id))
         )
     }
 
@@ -192,7 +203,8 @@ impl Distro {
         self.users.as_ref()
         .and_then(|users|
             users.iter()
-            .find(|u| u.id == uid).and_then(|u| Some(u.name.as_str()))
+            .find(|u| u.id == uid)
+            .and_then(|u| Some(u.name.as_str()))
         )
     }
 
@@ -200,7 +212,8 @@ impl Distro {
         self.groups.as_ref()
         .and_then(|groups|
             groups.iter()
-            .find(|u| u.id == gid).and_then(|u| Some(u.name.as_str()))
+            .find(|u| u.id == gid)
+            .and_then(|u| Some(u.name.as_str()))
         )
     }
 }

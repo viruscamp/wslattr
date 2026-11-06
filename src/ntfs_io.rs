@@ -6,7 +6,7 @@ use std::ptr::{addr_of, null_mut};
 use windows::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows::core::{HRESULT, PCSTR, PWSTR};
 use windows::Win32::Foundation::{ERROR_MORE_DATA, HANDLE, HLOCAL, LocalFree, MAX_PATH, NTSTATUS, OBJ_CASE_INSENSITIVE, OBJ_IGNORE_IMPERSONATED_DEVICEMAP, STATUS_IO_REPARSE_TAG_NOT_HANDLED, STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING, WIN32_ERROR};
-use windows::Wdk::Storage::FileSystem::{FILE_BASIC_INFORMATION, FILE_EA_INFORMATION, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, FileBasicInformation, FileEaInformation, NtOpenFile, NtQueryEaFile, NtQueryInformationFile, NtSetEaFile, REPARSE_DATA_BUFFER};
+use windows::Wdk::Storage::FileSystem::{FILE_BASIC_INFORMATION, FILE_EA_INFORMATION, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, FileBasicInformation, FileEaInformation, NtOpenFile, NtQueryEaFile, NtQueryInformationFile, NtReadFile, NtSetEaFile, REPARSE_DATA_BUFFER};
 use windows::Win32::System::IO::{DeviceIoControl, IO_STATUS_BLOCK};
 use windows::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, REPARSE_GUID_DATA_BUFFER, ReadFile, WriteFile};
 use windows::Win32::System::Ioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_GET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT};
@@ -74,13 +74,14 @@ pub unsafe fn open_file(file_path: &UNICODE_STRING, writable: bool) -> Result<(H
                 FILE_SYNCHRONOUS_IO_NONALERT.0 | FILE_OPEN_REPARSE_POINT.0
             );
             if nt_status.is_err() {
-                println!("[ERROR] NtOpenFile: {:#x} , open as REPARSE_POINT", nt_status.0);
+                
+                println!("[ERROR] NtOpenFile: {:#x} {}, open as REPARSE_POINT", nt_status.0, nt_status.to_hresult().message());
                 //println!("{}", error_msg_ntdll(nt_status.0 as u32).unwrap());
                 return Err(nt_status.to_io_error());
             }
             return Ok((file_handle, OpenFileType::ReparsePoint));
         } else {
-            println!("[ERROR] NtOpenFile: {:#x}", nt_status.0);
+            println!("[ERROR] NtOpenFile: {:#x} {}", nt_status.0, nt_status.to_hresult().message());
             return Err(nt_status.to_io_error());
         }
     }
@@ -99,9 +100,9 @@ pub unsafe fn read_ea_all(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
         transmute(&mut ea_info),
         size_of::<FILE_EA_INFORMATION>() as u32,
         FileEaInformation
-    );    
+    );
     if nt_status.is_err() {
-        println!("[ERROR] NtQueryInformationFile: {:#x}", nt_status.0);
+        println!("[ERROR] NtQueryInformationFile: {:#x} {}", nt_status.0, nt_status.to_hresult().message());
         return Err(nt_status.to_io_error());
     }
     if ea_info.EaSize == 0 {
@@ -122,7 +123,7 @@ pub unsafe fn read_ea_all(file_handle: HANDLE) -> Result<Option<Vec<u8>>> {
         true,
     );
     if nt_status.is_err() {
-        println!("[ERROR] NtQueryEaFile: {:#x}", nt_status.0);
+        println!("[ERROR] NtQueryEaFile: {:#x} {}", nt_status.0, nt_status.to_hresult().message());
         return Err(nt_status.to_io_error());
     }
 
@@ -139,7 +140,7 @@ pub unsafe fn write_ea(file_handle: HANDLE, buf: &[u8]) -> Result<()> {
         buf.len() as u32,
     );
     if nt_status.is_err() {
-        println!("[ERROR] NtSetEaFile: {:#x}", nt_status.0);
+        println!("[ERROR] NtSetEaFile: {:#x} {}", nt_status.0, nt_status.to_hresult().message());
         return Err(nt_status.to_io_error());
     }
     Ok(())
@@ -269,7 +270,7 @@ pub fn query_file_basic_infomation(file_handle: HANDLE) -> Result<FILE_BASIC_INF
         FileBasicInformation,
     ) };
     if nt_status.is_err() {
-        println!("[ERROR] NtQueryInformationFile: {:#x}", nt_status.0);
+        println!("[ERROR] NtQueryInformationFile: {:#x} {}", nt_status.0, nt_status.to_hresult().message());
         return Err(nt_status.to_io_error());
     }
     Ok(fbi)

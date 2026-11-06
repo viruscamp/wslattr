@@ -61,7 +61,7 @@ impl WslFile {
         if !self.file_handle.is_invalid() {
             let nt_status = unsafe { NtClose(self.file_handle) };
             if nt_status.is_err() {
-                println!("[ERROR] NtClose: {:#x}", nt_status.0);
+                println!("[ERROR] NtClose: {:#x} {}", nt_status.0, nt_status.to_hresult().message());
             }
             self.file_handle = HANDLE::default();
         }
@@ -105,7 +105,7 @@ pub unsafe fn open_handle(path: &Path, writable: bool) -> Result<WslFile> {
         null_mut(),
     );
     if nt_status.is_err() {
-        println!("[ERROR] RtlDosPathNameToNtPathName_U_WithStatus: {:#x}", &nt_status.0);
+        println!("[ERROR] RtlDosPathNameToNtPathName_U_WithStatus: {:#x} {}", nt_status.0, nt_status.to_hresult().message());
         return Err(nt_status.to_io_error());
     }
     wsl_file.full_path = full_path;
@@ -120,7 +120,7 @@ pub unsafe fn open_handle(path: &Path, writable: bool) -> Result<WslFile> {
             transmute(&mut file_attribute_tag_info),
             size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
         ) {
-            println!("[ERROR] GetFileInformationByHandleEx {}", &err);
+            println!("[ERROR] GetFileInformationByHandleEx {:#x} {}", err.code().0, err.message());
             return Err(err.into());
         }
         wsl_file.reparse_tag = Some(file_attribute_tag_info.ReparseTag);

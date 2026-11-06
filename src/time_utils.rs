@@ -3,9 +3,10 @@
 //! tv_nsec, 32bit, 1ns, Nano seconds of access time
 
 use std::fmt::Display;
-use std::sync::LazyLock;
 
-use time::{format_description, Duration, OffsetDateTime};
+use time::{Duration, OffsetDateTime};
+use time::format_description::StaticFormatDescription;
+use time::macros::format_description;
 use windows::Win32::Foundation::FILETIME;
 
 /// a 64-bit value representing the number of 100-nanosecond intervals since January 1, 1601 (UTC).
@@ -45,12 +46,6 @@ impl Into<(u64, u32)> for LxfsTime {
     }
 }
 
-impl From<u64> for LxfsTime {
-    fn from(t64: u64) -> Self {
-        u64_to_lxfs_time(t64)
-    }
-}
-
 impl From<FILETIME> for LxfsTime {
     fn from(ft: FILETIME) -> Self {
         filetime_to_lxfs_time(ft)
@@ -63,86 +58,79 @@ impl Into<FILETIME> for LxfsTime {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct UlargeIntegerS {
-    low_part: u32,
-    high_part: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-union ULARGE_INTEGER {
-    s: UlargeIntegerS,
-    u: UlargeIntegerS,
-    quad_part: u64,
-}
-
 pub fn u64_to_filetime(t64: u64) -> FILETIME {
-    let mut ull = ULARGE_INTEGER { quad_part: t64 };
-    let s = unsafe { &mut ull.s };
     FILETIME {
-        dwLowDateTime: s.low_part,
-        dwHighDateTime: s.high_part,
+        dwLowDateTime: t64 as u32,
+        dwHighDateTime: (t64 >> 32) as u32,
     }
 }
 
 pub fn filetime_to_u64(ft: FILETIME) -> u64 {
-    let mut ull = ULARGE_INTEGER { quad_part: 0 };
-    let s = unsafe { &mut ull.s };
-    s.low_part = ft.dwLowDateTime;
-    s.high_part = ft.dwHighDateTime;
-    let t64 = unsafe { ull.quad_part };
-    return t64;
+    ft.dwHighDateTime as u64 * 0x100000000u64 + ft.dwLowDateTime as u64
 }
 
+pub const SECS_1601_TO_1970: u64 = 60 * 60 * 24 * (365 * (1970-1601) + 89);
+
 pub fn lxfs_time_to_filetime(lt: LxfsTime) -> FILETIME {
-    let t64 = lxfs_time_to_u64(lt);
+    let t64 = (lt.tv_sec + SECS_1601_TO_1970) * 10000000 + (lt.tv_nsec / 100) as u64;
     u64_to_filetime(t64)
 }
 
 pub fn filetime_to_lxfs_time(ft: FILETIME) -> LxfsTime {
     let t64 = filetime_to_u64(ft);
-    u64_to_lxfs_time(t64)
-}
-
-pub fn lxfs_time_to_u64(lt: LxfsTime) -> u64 {
-    (lt.tv_sec * 10000000u64) + 116444736000000000u64 + (lt.tv_nsec as u64/100)
-}
-
-pub fn u64_to_lxfs_time(t64: u64) -> LxfsTime {
-    let (sec, ns100) = ( t64 / 10000000u64, t64 % 10000000u64);
+    let (sec, ns100) = (t64 / 10000000, t64 % 10000000);
     LxfsTime {
-        tv_sec: sec - 11644473600u64,
-        tv_nsec: (ns100 as u32) * 100u32,
+        tv_sec: sec - SECS_1601_TO_1970,
+        tv_nsec: (ns100 as u32) * 100,
     }
 }
 
-pub const FILE_TIME_FORMAT_STR: &'static str = "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:7] UTC";
+pub fn u64_to_lxfs_time(t64: u64) -> LxfsTime {
+    filetime_to_lxfs_time(u64_to_filetime(t64))
+}
 
-pub static FILE_TIME_FORMAT: LazyLock<Vec<format_description::FormatItem<'static>>> = LazyLock::new(|| {
-    format_description::parse_borrowed::<1>(FILE_TIME_FORMAT_STR).unwrap()
-});
+pub const FILE_TIME_FORMAT: StaticFormatDescription = format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:7] UTC");
 
 #[test]
 fn test_convert() {
-    let tv = LxfsTime {
+    let lxtv = LxfsTime {
         tv_sec: 1729741525,
         tv_nsec: 3480100,
     };
-    let ft = lxfs_time_to_filetime(tv);
+    let ft = lxfs_time_to_filetime(lxtv);
 
-    assert_eq!(tv, filetime_to_lxfs_time(ft));
+    assert_eq!(lxtv, filetime_to_lxfs_time(ft));
 }
 
 #[test]
 fn test_display() {
-    let tv_sec: u64 = 1729741525;
-    let tv_nsec: u32 = 3480100;
+    let lxtv = LxfsTime {
+        tv_sec: 1729741525,
+        tv_nsec: 3480100,
+    };
 
-    let odt = OffsetDateTime::from_unix_timestamp(tv_sec as i64).unwrap() + Duration::nanoseconds(tv_nsec as i64);
-    println!("myformat: {}", odt.format(&FILE_TIME_FORMAT).unwrap());
+    assert_eq!("2024-10-24 03:45:25.0034801 UTC", lxtv.to_string());
+
+    let odt = OffsetDateTime::from_unix_timestamp(lxtv.tv_sec as i64).unwrap() + Duration::nanoseconds(lxtv.tv_nsec as i64);
+    println!("myformat: {}", odt.format(FILE_TIME_FORMAT).unwrap());
     println!("default: {}", odt);
 
-    assert_eq!("2024-10-24 03:45:25.0034801 UTC", odt.format(&FILE_TIME_FORMAT).unwrap());
+    assert_eq!("2024-10-24 03:45:25.0034801 UTC", odt.format(FILE_TIME_FORMAT).unwrap());
+}
+
+#[test]
+fn test_filetime() {
+    //let ft = u64_to_filetime(1);
+    //let lxtv = filetime_to_lxfs_time(ft);
+
+    let d1 = time::macros::datetime!(1601-02-03 04:05:06.789000000 UTC);
+    println!("d1: {}", d1.format(FILE_TIME_FORMAT).unwrap());
+    assert_eq!(
+        d1.format(FILE_TIME_FORMAT).unwrap(),
+        "1601-02-03 04:05:06.7890000 UTC"
+    );
+
+    let odt = OffsetDateTime::from_unix_timestamp(-3).unwrap();
+    println!("myformat: {}", odt.format(FILE_TIME_FORMAT).unwrap());
+    println!("default: {}", odt);
 }

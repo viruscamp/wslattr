@@ -10,9 +10,9 @@ dunce = "1.0"
 normpath = "1.5"
 regex-lite = "0.1"
 #regex= "1.12"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
 walkdir = "2.5"
-windows-registry = "0.100"
+windows-registry = "0.6.1"
 
 [dependencies.windows]
 version = "0.62"
