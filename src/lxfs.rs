@@ -8,7 +8,7 @@ use crate::distro::{Distro, FsType};
 use crate::ea_parse::{EaEntry, EaEntryRaw};
 use crate::posix::{lsperms, StModeType, DEFAULT_MODE};
 use crate::ntfs_io::read_data;
-use crate::time_utils::{u64_to_lxfs_time, LxfsTime}; 
+use crate::time_utils::{i64_to_lxfs_time, LxfsTime};
 use crate::wsl_file::{WslFile, WslFileAttributes};
 
 pub const LXATTRB: &'static str = "LXATTRB";
@@ -24,12 +24,12 @@ pub struct EaLxattrbV1 {
     pub st_uid: u32,        // Numeric identifier of user who owns file (Linux-specific).
     pub st_gid: u32,        // Numeric identifier of group that owns the file (Linux-specific)
     pub st_rdev: u32,       // Drive number of the disk containing the file.
-    pub st_atime_nsec: u32, // Time of last access of file (nano-seconds).
-    pub st_mtime_nsec: u32, // Time of last modification of file (nano-seconds).
-    pub st_ctime_nsec: u32, // Time of change of file (nano-seconds).
-    pub st_atime: u64,      // Time of last access of file.
-    pub st_mtime: u64,      // Time of last modification of file.
-    pub st_ctime: u64,      // Time of change of file.
+    pub st_atime_nsec: i32, // Time of last access of file (nano-seconds).
+    pub st_mtime_nsec: i32, // Time of last modification of file (nano-seconds).
+    pub st_ctime_nsec: i32, // Time of change of file (nano-seconds).
+    pub st_atime: i64,      // Time of last access of file.
+    pub st_mtime: i64,      // Time of last modification of file.
+    pub st_ctime: i64,      // Time of change of file.
 }
 
 impl EaLxattrbV1 {
@@ -50,9 +50,9 @@ impl EaLxattrbV1 {
         };
 
         if let Some(fbi) = basic_file_info {
-            (lxattrb.st_atime, lxattrb.st_atime_nsec) = u64_to_lxfs_time(fbi.LastAccessTime as u64).into();
-            (lxattrb.st_mtime, lxattrb.st_mtime_nsec) = u64_to_lxfs_time(fbi.LastWriteTime as u64).into();
-            (lxattrb.st_ctime, lxattrb.st_ctime_nsec) = u64_to_lxfs_time(fbi.ChangeTime as u64).into();
+            (lxattrb.st_atime, lxattrb.st_atime_nsec) = i64_to_lxfs_time(fbi.LastAccessTime).into();
+            (lxattrb.st_mtime, lxattrb.st_mtime_nsec) = i64_to_lxfs_time(fbi.LastWriteTime).into();
+            (lxattrb.st_ctime, lxattrb.st_ctime_nsec) = i64_to_lxfs_time(fbi.ChangeTime).into();
         }
 
         return lxattrb;

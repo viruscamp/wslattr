@@ -15,7 +15,7 @@ use windows::Win32::Foundation::HANDLE;
 use wsl_file::{open_handle, WslFile, WslFileAttributes};
 use wslfs::WslfsParsed;
 
-use crate::time_utils::u64_to_lxfs_time;
+use crate::time_utils::i64_to_lxfs_time;
 
 mod distro;
 mod path_utils;
@@ -617,13 +617,13 @@ fn downgrade(wsl_file: &mut WslFile,  wslfs: &WslfsParsed, lxfs: &LxfsParsed) {
 
 fn print_file_time(wsl_file: &WslFile) {
     if let Some(fbi) = wsl_file.basic_file_info {
-        let creation_time = u64_to_lxfs_time(fbi.CreationTime as u64);
+        let creation_time = i64_to_lxfs_time(fbi.CreationTime);
         println!("{:28}{}", "CreationTime:", creation_time);
-        let last_access_time = u64_to_lxfs_time(fbi.LastAccessTime as u64);
+        let last_access_time = i64_to_lxfs_time(fbi.LastAccessTime);
         println!("{:28}{}", "LastAccessTime:", last_access_time);
-        let last_write_time = u64_to_lxfs_time(fbi.LastWriteTime as u64);
+        let last_write_time = i64_to_lxfs_time(fbi.LastWriteTime);
         println!("{:28}{}", "LastWriteTime:", last_write_time);
-        let change_time = u64_to_lxfs_time(fbi.ChangeTime as u64);
+        let change_time = i64_to_lxfs_time(fbi.ChangeTime);
         println!("{:28}{}", "ChangeTime:", change_time);
     } else {
         println!("[ERROR] cannot query file times")
