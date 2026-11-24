@@ -3,7 +3,6 @@
 //! tv_nsec, 32bit, 1ns, Nano seconds of access time
 
 use std::fmt::Display;
-use std::time::SystemTime;
 
 use time::{Duration, OffsetDateTime};
 use time::format_description::StaticFormatDescription;
@@ -138,8 +137,6 @@ fn test_display() {
         tv_sec: 1729741525,
         tv_nsec: 3480101,
     };
-
-    let a:SystemTime;
 
     assert_eq!("2024-10-24 03:45:25.003480101 UTC", lxtv.to_string());
 

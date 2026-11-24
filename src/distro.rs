@@ -46,10 +46,20 @@ const DefaultDistribution: &str = "DefaultDistribution";
 
 #[allow(non_upper_case_globals)]
 const DistributionName: &str = "DistributionName";
+
 #[allow(non_upper_case_globals)]
 const BasePath: &str = "BasePath";
+
+// Flags
+// Valid but overridden by /etc/wsl.conf after Windows Build 17093 and later.
+// WSL_DISTRIBUTION_FLAGS_NONE = 0x0,
+// WSL_DISTRIBUTION_FLAGS_ENABLE_INTEROP = 0x1,
+// WSL_DISTRIBUTION_FLAGS_APPEND_NT_PATH = 0x2,
+// WSL_DISTRIBUTION_FLAGS_ENABLE_DRIVE_MOUNTING = 0x4
+// WSL_DISTRIBUTION_FLAGS_WSL2 = 0x8 // undocmented
 #[allow(non_upper_case_globals)]
 const Flags: &str = "Flags";
+
 #[allow(non_upper_case_globals)]
 const Version: &str = "Version";
 
