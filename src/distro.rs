@@ -29,6 +29,7 @@ pub enum DistroSource {
 
 #[derive(Debug)]
 pub struct Distro {
+    pub guid: String,
     pub name: String,
     pub base_path: PathBuf,
     pub fs_type: Option<FsType>, // None means WSL2
@@ -66,61 +67,56 @@ const Version: &str = "Version";
 pub fn try_load_from_reg_default() -> Result<Distro> {
     let lxss = CURRENT_USER.open(REG_LXSS)?;
     let default_distro_guid = lxss.get_string(DefaultDistribution)?;
-    let mut d = try_load_from_reg_key(lxss.open(default_distro_guid)?)?;
+    let dist_key = lxss.open(&default_distro_guid)?;
+    let mut d = try_load_from_reg_key(default_distro_guid, dist_key)?;
     d.source = DistroSource::Default;
     return Ok(d);
 }
 
-pub fn try_load_reg<S: AsRef<str>>(name: S) -> Result<Key> {
+pub fn try_load_reg<S: AsRef<str>>(name: S) -> Result<(String, Key)> {
     let lxss = CURRENT_USER.open(REG_LXSS)?;
-    lxss.keys()?
-    .filter_map(|k| lxss.open(k).ok())
-    .filter(|k| {
-        if let Ok(s) = k.get_string(DistributionName) {
-            s.as_str() == name.as_ref()
-        } else {
-            false
+    for guid in lxss.keys()? {
+        if let Ok(k) = lxss.open(&guid) {
+            if let Ok(s) = k.get_string(DistributionName) {
+                if s.as_str() == name.as_ref() {
+                    return Ok((guid, k));
+                }
+            }
         }
-    })
-    .nth(0).map_or_else(|| Err(ERROR_FILE_NOT_FOUND.to_hresult().into()), |x| Ok(x))
+    }
+    Err(ERROR_FILE_NOT_FOUND.to_hresult().into())
 }
 
 pub fn try_load<S: AsRef<str>>(name: S) -> Result<Distro> {
     try_load_reg(name)
-    .and_then(try_load_from_reg_key)
+    .and_then(|(guid, k)| try_load_from_reg_key(guid, k))
 }
 
 pub fn try_load_from_absolute_path<P: AsRef<Path>>(path: P) -> Result<Distro> {
     if let Some(n) = try_get_distro_from_unc_path(path.as_ref()) {
-        return try_load(&n.to_string_lossy())
-        .and_then(|mut x| {
-            x.source = DistroSource::FilePathUNC;
-            Ok(x)
-        });
+        if let Ok(mut distro) = try_load(&n.to_string_lossy()) {
+            distro.source = DistroSource::FilePathUNC;
+            return Ok(distro);
+        }
     }
 
     if is_path_prefix_disk(&try_get_abs_path_prefix(path.as_ref())) {
         let path = normalize_path(path.as_ref())?;
         let lxss = CURRENT_USER.open(REG_LXSS)?;
-        return lxss.keys()?
-        .filter_map(|k| lxss.open(k).ok())
-        .filter(|k| {
-            if let Ok(s) = k.get_string(BasePath) {
-                if let Ok(base_path) = normalize_path(&PathBuf::from(&s)) {
-                    return path.starts_with(base_path);
+
+        for guid in lxss.keys()? {
+            if let Ok(k) = lxss.open(&guid) {
+                if let Ok(s) = k.get_string(BasePath) {
+                    if let Ok(base_path) = normalize_path(&PathBuf::from(&s)) {
+                        if path.starts_with(base_path) {
+                            let mut distro = try_load_from_reg_key(guid, k)?;
+                            distro.source = DistroSource::FilePathDisk;
+                            return Ok(distro);
+                        }
+                    }
                 }
             }
-            return false;
-        })
-        .nth(0)
-        .map_or_else(
-            || Err(ERROR_FILE_NOT_FOUND.to_hresult().into()), 
-            |k| {
-                let mut distro = try_load_from_reg_key(k)?;
-                distro.source = DistroSource::FilePathDisk;
-                Ok(distro)
-            }
-        );
+        }
     }
 
     return Err(ERROR_FILE_NOT_FOUND.to_hresult().into());
@@ -142,7 +138,7 @@ pub fn try_load_from_current_dir() -> Result<Distro> {
     )
 }
 
-pub fn try_load_from_reg_key(distro_key: Key) -> Result<Distro> {
+pub fn try_load_from_reg_key(guid: String, distro_key: Key) -> Result<Distro> {
     let name: String = distro_key.get_string(DistributionName)?;
     let base_path: String = distro_key.get_string(BasePath)?;
     let base_path = PathBuf::from(&base_path);
@@ -168,6 +164,7 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Result<Distro> {
     let users = load_users(&base_path.join("rootfs"));
 
     return Ok(Distro {
+        guid,
         name,
         base_path,
         fs_type,
@@ -179,16 +176,15 @@ pub fn try_load_from_reg_key(distro_key: Key) -> Result<Distro> {
 
 impl Distro {
     pub fn set_fs_type(&mut self, fs_type: Option<FsType>) -> Result<()> {
-        try_load_reg(&self.name)
-        .and_then(|k| {
-            match fs_type {
-                None => k.remove_value(Version),
-                Some(FsType::Lxfs) => k.set_u32(Version, FsType::Lxfs as u32),
-                Some(FsType::Wslfs) => k.set_u32(Version, FsType::Wslfs as u32),
-            }?;
-            self.fs_type = fs_type;
-            Ok(())
-        })
+        let lxss = CURRENT_USER.open(REG_LXSS)?;
+        let dist_key = lxss.create(&self.guid)?;
+        match fs_type {
+            None => dist_key.remove_value(Version),
+            Some(FsType::Lxfs) => dist_key.set_u32(Version, FsType::Lxfs as u32),
+            Some(FsType::Wslfs) => dist_key.set_u32(Version, FsType::Wslfs as u32),
+        }?;
+        self.fs_type = fs_type;
+        Ok(())
     }
 
     pub fn uid(&self, user_name: &str) -> Option<u32> {
