@@ -51,13 +51,13 @@ const DistributionName: &str = "DistributionName";
 #[allow(non_upper_case_globals)]
 const BasePath: &str = "BasePath";
 
-// Flags
+// Flags, from wslapi.h
 // Valid but overridden by /etc/wsl.conf after Windows Build 17093 and later.
 // WSL_DISTRIBUTION_FLAGS_NONE = 0x0,
 // WSL_DISTRIBUTION_FLAGS_ENABLE_INTEROP = 0x1,
 // WSL_DISTRIBUTION_FLAGS_APPEND_NT_PATH = 0x2,
 // WSL_DISTRIBUTION_FLAGS_ENABLE_DRIVE_MOUNTING = 0x4
-// WSL_DISTRIBUTION_FLAGS_WSL2 = 0x8 // undocmented
+// LXSS_DISTRO_FLAGS_VM_MODE = 0x8 // only in https://github.com/microsoft/WSL/blob/6e43d804/src/windows/service/inc/wslservice.idl#L105-L111
 #[allow(non_upper_case_globals)]
 const Flags: &str = "Flags";
 
